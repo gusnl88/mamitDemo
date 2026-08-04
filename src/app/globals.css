@@ -1,0 +1,29 @@
+html,
+body {
+  /*
+   * 여기 의도적으로 `overflow-x`를 넣지 않음: html/body 중 한 축에 overflow를
+   * 설정하면 다른 축도 암묵적으로 "auto"가 되어(CSS Overflow 스펙),
+   * 자체 스크롤 클리핑 박스가 되면서 뷰포트에 붙어야 하는 `position: sticky`가
+   * 깨짐(예: admin 레이아웃의 sidebar/header). 루트 박스가 뷰포트보다
+   * 커지는 것만 막으면 되므로 `max-width`만으로 충분하고, 가로로 넘칠 수
+   * 있는 페이지 콘텐츠는 로컬에서 따로 클리핑해야 함(AdminLayout의 Content
+   * 영역 참고).
+   */
+  max-width: 100vw;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
