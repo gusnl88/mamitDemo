@@ -13,6 +13,7 @@ interface MemberListItem {
   nickname: string;
   profileImageUrl: string | null;
   lastLoginAt: string | null;
+  status: string;
 }
 
 interface MemberPageResponse {
@@ -62,6 +63,15 @@ export default function MembersPage() {
       title: "닉네임",
       dataIndex: "nickname",
       key: "nickname",
+      render: (nickname: string, record: MemberListItem) =>
+        record.status !== "ACTIVE" ? (
+          <>
+            {nickname}
+            <span style={{ color: "rgba(0, 0, 0, 0.45)" }}> (탈퇴)</span>
+          </>
+        ) : (
+          nickname
+        ),
       sorter: { multiple: 1 },
     },
     {

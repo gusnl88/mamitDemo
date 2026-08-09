@@ -144,6 +144,7 @@ function toMemberListItem(member: MemberSeed) {
     nickname: member.nickname,
     profileImageUrl: member.profileImageUrl,
     lastLoginAt: member.lastLoginAt,
+    status: member.status,
   };
 }
 
@@ -160,18 +161,27 @@ function listMembers(search: URLSearchParams) {
   return { content: content.map((item) => toMemberListItem(item as unknown as MemberSeed)), ...rest };
 }
 
+function membershipsForUser(id: number) {
+  return moims.flatMap((moim) =>
+    moim.memberships
+      .filter((membership) => membership.userId === id)
+      .map((membership) => ({
+        moimId: moim.id,
+        moimName: moim.name,
+        role: membership.role,
+        joinedAt: membership.joinedAt,
+        leftAt: membership.leftAt,
+      })),
+  );
+}
+
 function getMemberDetail(id: number) {
   const member = members.find((item) => item.id === id);
   if (!member) fail("존재하지 않는 회원입니다.", "MEMBER_NOT_FOUND");
 
-  const joinedMoims = moims
-    .filter((moim) => moim.memberUserIds.includes(id))
-    .map((moim) => ({
-      moimId: moim.id,
-      moimName: moim.name,
-      role: moim.memberUserIds[0] === id ? "OWNER" : "MEMBER",
-      joinedAt: moim.createdAt,
-    }));
+  const memberships = membershipsForUser(id);
+  const joinedMoims = memberships.filter((item) => item.leftAt === null);
+  const leftMoims = memberships.filter((item) => item.leftAt !== null);
 
   return {
     id: member.id,
@@ -180,11 +190,17 @@ function getMemberDetail(id: number) {
     realName: member.realName,
     phoneNumber: member.phoneNumber,
     createdAt: member.createdAt,
+    status: member.status,
     joinedMoims,
+    leftMoims,
   };
 }
 
 // ───────────────────────── 모임 (moims) ─────────────────────────
+
+function activeMembers(moim: MoimSeed) {
+  return moim.memberships.filter((membership) => membership.status === "ACTIVE");
+}
 
 function toMoimListItem(moim: MoimSeed) {
   return {
@@ -192,7 +208,7 @@ function toMoimListItem(moim: MoimSeed) {
     name: moim.name,
     categoryName: moim.categoryName,
     regionName: moim.regionName,
-    memberCount: moim.memberUserIds.length,
+    memberCount: activeMembers(moim).length,
     createdAt: moim.createdAt,
   };
 }
@@ -203,7 +219,7 @@ function listMoims(search: URLSearchParams) {
   const size = Number(search.get("size") ?? 20);
 
   const filtered = keyword ? moims.filter((moim) => moim.name.includes(keyword)) : moims;
-  const withDerived = filtered.map((moim) => ({ ...moim, memberCount: moim.memberUserIds.length }));
+  const withDerived = filtered.map((moim) => ({ ...moim, memberCount: activeMembers(moim).length }));
   const sorted = applySort(withDerived as unknown as Record<string, unknown>[], search.get("sort"));
   const { content, ...rest } = paginate(sorted, page, size);
   return { content: content.map((item) => toMoimListItem(item as unknown as MoimSeed)), ...rest };
@@ -213,13 +229,13 @@ function getMoimDetail(id: number) {
   const moim = moims.find((item) => item.id === id);
   if (!moim) fail("존재하지 않는 모임입니다.", "MOIM_NOT_FOUND");
 
-  const memberItems = moim.memberUserIds.map((userId, index) => {
-    const member = members.find((item) => item.id === userId);
+  const memberItems = activeMembers(moim).map((membership) => {
+    const member = members.find((item) => item.id === membership.userId);
     return {
-      userId,
+      userId: membership.userId,
       nickname: member?.nickname ?? "알 수 없음",
-      role: index === 0 ? "OWNER" : "MEMBER",
-      joinedAt: moim.createdAt,
+      role: membership.role,
+      joinedAt: membership.joinedAt,
     };
   });
 
@@ -230,7 +246,7 @@ function getMoimDetail(id: number) {
     categoryName: moim.categoryName,
     regionName: moim.regionName,
     maxMembers: moim.maxMembers,
-    currentMembers: moim.memberUserIds.length,
+    currentMembers: memberItems.length,
     status: moim.status,
     createdAt: moim.createdAt,
     members: memberItems,

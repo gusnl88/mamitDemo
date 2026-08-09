@@ -8,6 +8,7 @@ import { DataTable } from "@/components/table/DataTable";
 import type { SortSpec } from "@/components/table/DataTable";
 import { ErrorAlert } from "@/components/common/ErrorAlert";
 import { MemberDetailModal } from "@/components/members/MemberDetailModal";
+import { MoimRoleTag } from "@/components/common/MoimRoleTag";
 import { apiClient } from "@/lib/api/client";
 import { ApiError } from "@/types/api";
 
@@ -210,9 +211,7 @@ export default function MeetupsPage() {
                       }}
                     >
                       <span>{member.nickname}</span>
-                      <Tag color={member.role === "OWNER" ? "gold" : "default"}>
-                        {member.role === "OWNER" ? "모임장" : "멤버"}
-                      </Tag>
+                      <MoimRoleTag role={member.role} />
                     </div>
                   ))}
                 </div>

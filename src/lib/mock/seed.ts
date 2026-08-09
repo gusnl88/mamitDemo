@@ -29,6 +29,8 @@ function isoDaysFromNow(days: number): string {
 
 // ───────────────────────── 회원 (members) ─────────────────────────
 
+export type MemberStatus = "ACTIVE" | "WITHDRAWN";
+
 export interface MemberSeed {
   id: number;
   nickname: string;
@@ -37,6 +39,7 @@ export interface MemberSeed {
   phoneNumber: string | null;
   createdAt: string;
   lastLoginAt: string | null;
+  status: MemberStatus;
 }
 
 const NICK_PREFIX = [
@@ -90,6 +93,7 @@ export function buildMembers(count: number): MemberSeed[] {
   return Array.from({ length: count }, (_, index) => {
     const hasRealInfo = Math.random() > 0.4;
     const everLoggedIn = Math.random() > 0.1;
+    const withdrawn = Math.random() < 0.1;
     return {
       id: index + 1,
       nickname: makeNickname(usedNames),
@@ -100,11 +104,23 @@ export function buildMembers(count: number): MemberSeed[] {
         : null,
       createdAt: isoDaysAgo(randomInt(5, 400)),
       lastLoginAt: everLoggedIn ? isoDaysAgo(randomInt(0, 30)) : null,
+      status: withdrawn ? "WITHDRAWN" : "ACTIVE",
     };
   });
 }
 
 // ───────────────────────── 모임 (moims) ─────────────────────────
+
+export type MoimMemberRole = "OWNER" | "MEMBER";
+export type MoimMemberStatus = "ACTIVE" | "LEFT" | "KICKED";
+
+export interface MoimMembership {
+  userId: number;
+  role: MoimMemberRole;
+  status: MoimMemberStatus;
+  joinedAt: string;
+  leftAt: string | null;
+}
 
 export interface MoimSeed {
   id: number;
@@ -115,7 +131,8 @@ export interface MoimSeed {
   maxMembers: number;
   status: "RECRUITING" | "ONGOING" | "CLOSED" | "COMPLETED" | "DELETED";
   createdAt: string;
-  memberUserIds: number[]; // 회원 id 참조 (첫 번째가 모임장)
+  /** 첫 번째가 모임장(OWNER). 자진탈퇴(LEFT)/강퇴(KICKED) 이력도 함께 보관. */
+  memberships: MoimMembership[];
 }
 
 const MOIM_CATEGORIES = ["육아정보", "취미", "운동", "스터디", "맛집/카페", "재테크", "소통"];
@@ -154,6 +171,24 @@ const STATUS_POOL: MoimSeed["status"][] = [
   "COMPLETED",
 ];
 
+function buildMembership(userId: number, role: MoimMemberRole, moimAgeDays: number): MoimMembership {
+  const joinedDaysAgo = randomInt(0, moimAgeDays);
+  const joinedAt = isoDaysAgo(joinedDaysAgo);
+  // OWNER는 자기 모임을 나가지 않는다고 가정 — MEMBER만 일부 탈퇴/강퇴 처리.
+  const left = role === "MEMBER" && Math.random() < 0.15;
+  if (!left) {
+    return { userId, role, status: "ACTIVE", joinedAt, leftAt: null };
+  }
+  const leftDaysAgo = randomInt(0, joinedDaysAgo);
+  return {
+    userId,
+    role,
+    status: Math.random() < 0.5 ? "LEFT" : "KICKED",
+    joinedAt,
+    leftAt: isoDaysAgo(leftDaysAgo),
+  };
+}
+
 export function buildMoims(count: number, memberIds: number[]): MoimSeed[] {
   const usedNames = new Set<string>();
   return Array.from({ length: count }, (_, index) => {
@@ -166,6 +201,12 @@ export function buildMoims(count: number, memberIds: number[]): MoimSeed[] {
     const maxMembers = randomInt(6, 30);
     const memberCount = randomInt(2, maxMembers);
     const shuffled = [...memberIds].sort(() => Math.random() - 0.5);
+    const memberIdsForMoim = shuffled.slice(0, memberCount);
+
+    const createdDaysAgo = randomInt(3, 300);
+    const memberships = memberIdsForMoim.map((userId, memberIndex) =>
+      buildMembership(userId, memberIndex === 0 ? "OWNER" : "MEMBER", createdDaysAgo),
+    );
 
     return {
       id: index + 1,
@@ -175,8 +216,8 @@ export function buildMoims(count: number, memberIds: number[]): MoimSeed[] {
       regionName: pick(MOIM_REGIONS),
       maxMembers,
       status: pick(STATUS_POOL),
-      createdAt: isoDaysAgo(randomInt(3, 300)),
-      memberUserIds: shuffled.slice(0, memberCount),
+      createdAt: isoDaysAgo(createdDaysAgo),
+      memberships,
     };
   });
 }
@@ -239,7 +280,7 @@ export function buildReports(count: number, moimIds: number[], memberIds: number
     const status = pick(REPORT_STATUS_POOL);
     const isTerminal = status === "APPROVED" || status === "REJECTED";
     const createdAt = isoDaysAgo(randomInt(1, 60));
-    let reporterUserId = pick(memberIds);
+    const reporterUserId = pick(memberIds);
     let reportedUserId = pick(memberIds);
     while (reportedUserId === reporterUserId) {
       reportedUserId = pick(memberIds);
