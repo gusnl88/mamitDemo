@@ -31,6 +31,9 @@ function isoDaysFromNow(days: number): string {
 
 export type MemberStatus = "ACTIVE" | "WITHDRAWN";
 
+/** 데모 회원 수 — router.ts의 시드 로딩과 [id]/page.tsx의 generateStaticParams가 함께 참조한다. */
+export const MEMBER_COUNT = 60;
+
 export interface MemberSeed {
   id: number;
   nickname: string;
@@ -40,6 +43,8 @@ export interface MemberSeed {
   createdAt: string;
   lastLoginAt: string | null;
   status: MemberStatus;
+  /** 탈퇴 전이면 null. */
+  withdrawnAt: string | null;
 }
 
 const NICK_PREFIX = [
@@ -94,6 +99,7 @@ export function buildMembers(count: number): MemberSeed[] {
     const hasRealInfo = Math.random() > 0.4;
     const everLoggedIn = Math.random() > 0.1;
     const withdrawn = Math.random() < 0.1;
+    const createdDaysAgo = randomInt(5, 400);
     return {
       id: index + 1,
       nickname: makeNickname(usedNames),
@@ -102,9 +108,10 @@ export function buildMembers(count: number): MemberSeed[] {
       phoneNumber: hasRealInfo
         ? `010-${randomInt(1000, 9999)}-${randomInt(1000, 9999)}`
         : null,
-      createdAt: isoDaysAgo(randomInt(5, 400)),
+      createdAt: isoDaysAgo(createdDaysAgo),
       lastLoginAt: everLoggedIn ? isoDaysAgo(randomInt(0, 30)) : null,
       status: withdrawn ? "WITHDRAWN" : "ACTIVE",
+      withdrawnAt: withdrawn ? isoDaysAgo(randomInt(0, createdDaysAgo - 1)) : null,
     };
   });
 }

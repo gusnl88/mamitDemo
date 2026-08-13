@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import dayjs from "dayjs";
+import { Tag } from "antd";
 import { DataTable } from "@/components/table/DataTable";
 import type { SortSpec } from "@/components/table/DataTable";
 import { ErrorAlert } from "@/components/common/ErrorAlert";
-import { MemberDetailModal } from "@/components/members/MemberDetailModal";
 
 interface MemberListItem {
   id: number;
@@ -34,10 +35,10 @@ const toSortParam = (sorts: SortSpec[]) =>
   sorts.map((sort) => (sort.order === "descend" ? `-${sort.key}` : sort.key)).join(",");
 
 export default function MembersPage() {
+  const router = useRouter();
   const [page, setPage] = useState(1);
   const [keyword, setKeyword] = useState("");
   const [sorts, setSorts] = useState<SortSpec[]>([]);
-  const [detailId, setDetailId] = useState<number | null>(null);
 
   const query = new URLSearchParams({ page: String(page), size: String(PAGE_SIZE) });
   if (keyword) query.set("keyword", keyword);
@@ -63,15 +64,12 @@ export default function MembersPage() {
       title: "닉네임",
       dataIndex: "nickname",
       key: "nickname",
-      render: (nickname: string, record: MemberListItem) =>
-        record.status !== "ACTIVE" ? (
-          <>
-            {nickname}
-            <span style={{ color: "rgba(0, 0, 0, 0.45)" }}> (탈퇴)</span>
-          </>
-        ) : (
-          nickname
-        ),
+      render: (nickname: string, record: MemberListItem) => (
+        <>
+          {nickname}
+          {record.status !== "ACTIVE" && <Tag style={{ marginLeft: 8, color: "red" }}>탈퇴</Tag>}
+        </>
+      ),
       sorter: { multiple: 1 },
     },
     {
@@ -88,14 +86,14 @@ export default function MembersPage() {
       {error && <ErrorAlert message="회원 목록을 불러오지 못했습니다." onRetry={() => mutate()} />}
       <DataTable<MemberListItem>
         title="회원관리"
-        searchPlaceholder="닉네임 검색"
+        searchPlaceholder="닉네임 또는 휴대폰번호 검색"
         searchValue={keyword}
         onSearchChange={handleSearchChange}
         rowKey="id"
         columns={columns}
         dataSource={data?.content ?? []}
         loading={isLoading}
-        onRowClick={(record) => setDetailId(record.id)}
+        onRowClick={(record) => router.push(`/members/${record.id}`)}
         serverSide
         total={data?.totalElements}
         page={page}
@@ -103,8 +101,6 @@ export default function MembersPage() {
         onPageChange={setPage}
         onSortChange={handleSortChange}
       />
-
-      <MemberDetailModal memberId={detailId} onClose={() => setDetailId(null)} />
     </>
   );
 }

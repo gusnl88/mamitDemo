@@ -22,11 +22,12 @@ import {
   type AdminUserSeed,
   type FaqSeed,
   type Role,
+  MEMBER_COUNT,
 } from "@/lib/mock/seed";
 
 // ───────────────────────── 초기 데이터 로드 (localStorage 우선, 없으면 seed) ─────────────────────────
 
-const members = loadCollection<MemberSeed>("members", buildMembers(60));
+const members = loadCollection<MemberSeed>("members", buildMembers(MEMBER_COUNT));
 const moims = loadCollection<MoimSeed>(
   "moims",
   buildMoims(24, members.map((member) => member.id)),
@@ -154,9 +155,16 @@ function listMembers(search: URLSearchParams) {
   const size = Number(search.get("size") ?? 20);
 
   const filtered = keyword
-    ? members.filter((member) => member.nickname.includes(keyword))
+    ? members.filter(
+        (member) =>
+          member.nickname.includes(keyword) || (member.phoneNumber?.includes(keyword) ?? false),
+      )
     : members;
-  const sorted = applySort(filtered as unknown as Record<string, unknown>[], search.get("sort"));
+  const sorted = applySort(
+    filtered as unknown as Record<string, unknown>[],
+    search.get("sort"),
+    "createdAt",
+  );
   const { content, ...rest } = paginate(sorted, page, size);
   return { content: content.map((item) => toMemberListItem(item as unknown as MemberSeed)), ...rest };
 }
@@ -180,8 +188,12 @@ function getMemberDetail(id: number) {
   if (!member) fail("존재하지 않는 회원입니다.", "MEMBER_NOT_FOUND");
 
   const memberships = membershipsForUser(id);
-  const joinedMoims = memberships.filter((item) => item.leftAt === null);
-  const leftMoims = memberships.filter((item) => item.leftAt !== null);
+  const joinedMoims = memberships
+    .filter((item) => item.leftAt === null)
+    .sort((a, b) => b.joinedAt.localeCompare(a.joinedAt));
+  const leftMoims = memberships
+    .filter((item) => item.leftAt !== null)
+    .sort((a, b) => (b.leftAt as string).localeCompare(a.leftAt as string));
 
   return {
     id: member.id,
@@ -190,6 +202,7 @@ function getMemberDetail(id: number) {
     realName: member.realName,
     phoneNumber: member.phoneNumber,
     createdAt: member.createdAt,
+    withdrawnAt: member.withdrawnAt,
     status: member.status,
     joinedMoims,
     leftMoims,
