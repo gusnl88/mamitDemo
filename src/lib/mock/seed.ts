@@ -142,6 +142,9 @@ export interface MoimSeed {
   memberships: MoimMembership[];
 }
 
+/** 데모 모임 수 — router.ts의 시드 로딩과 [id]/page.tsx의 generateStaticParams가 함께 참조한다. */
+export const MOIM_COUNT = 24;
+
 const MOIM_CATEGORIES = ["육아정보", "취미", "운동", "스터디", "맛집/카페", "재테크", "소통"];
 const MOIM_REGIONS = [
   "서울 강남구",
@@ -176,6 +179,7 @@ const STATUS_POOL: MoimSeed["status"][] = [
   "ONGOING",
   "CLOSED",
   "COMPLETED",
+  "DELETED",
 ];
 
 function buildMembership(userId: number, role: MoimMemberRole, moimAgeDays: number): MoimMembership {

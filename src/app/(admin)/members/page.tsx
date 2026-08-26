@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import useSWR from "swr";
 import dayjs from "dayjs";
 import { Tag } from "antd";
@@ -35,7 +35,6 @@ const toSortParam = (sorts: SortSpec[]) =>
   sorts.map((sort) => (sort.order === "descend" ? `-${sort.key}` : sort.key)).join(",");
 
 export default function MembersPage() {
-  const router = useRouter();
   const [page, setPage] = useState(1);
   const [keyword, setKeyword] = useState("");
   const [sorts, setSorts] = useState<SortSpec[]>([]);
@@ -66,7 +65,9 @@ export default function MembersPage() {
       key: "nickname",
       render: (nickname: string, record: MemberListItem) => (
         <>
-          {nickname}
+          <Link href={`/members/${record.id}`} className="clickable">
+            {nickname}
+          </Link>
           {record.status !== "ACTIVE" && <Tag style={{ marginLeft: 8, color: "red" }}>탈퇴</Tag>}
         </>
       ),
@@ -93,7 +94,6 @@ export default function MembersPage() {
         columns={columns}
         dataSource={data?.content ?? []}
         loading={isLoading}
-        onRowClick={(record) => router.push(`/members/${record.id}`)}
         serverSide
         total={data?.totalElements}
         page={page}

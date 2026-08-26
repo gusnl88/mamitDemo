@@ -27,3 +27,14 @@ a {
   color: inherit;
   text-decoration: none;
 }
+
+/* 테이블에서 이름 등 클릭 가능한 셀 텍스트 — 파란 링크색 대신 hover 시에만 굵어지는 방식. */
+.clickable {
+  color: black;
+  cursor: pointer;
+}
+
+.clickable:hover {
+  color: black;
+  font-weight: 600;
+}

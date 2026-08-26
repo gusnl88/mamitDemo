@@ -23,6 +23,7 @@ import {
   type FaqSeed,
   type Role,
   MEMBER_COUNT,
+  MOIM_COUNT,
 } from "@/lib/mock/seed";
 
 // ───────────────────────── 초기 데이터 로드 (localStorage 우선, 없으면 seed) ─────────────────────────
@@ -30,7 +31,7 @@ import {
 const members = loadCollection<MemberSeed>("members", buildMembers(MEMBER_COUNT));
 const moims = loadCollection<MoimSeed>(
   "moims",
-  buildMoims(24, members.map((member) => member.id)),
+  buildMoims(MOIM_COUNT, members.map((member) => member.id)),
 );
 const reports = loadCollection<ReportSeed>(
   "reports",
@@ -219,6 +220,7 @@ function toMoimListItem(moim: MoimSeed) {
   return {
     id: moim.id,
     name: moim.name,
+    status: moim.status,
     categoryName: moim.categoryName,
     regionName: moim.regionName,
     memberCount: activeMembers(moim).length,

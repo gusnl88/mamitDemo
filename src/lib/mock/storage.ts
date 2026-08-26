@@ -1,6 +1,6 @@
 // 시드 스키마가 바뀔 때마다 버전을 올려서, 과거에 캐시된(예전 필드 구성) localStorage 데이터를
 // 새 코드가 잘못된 모양으로 읽어버리는 걸 방지한다 — 버전이 다르면 그냥 새 seed로 다시 시작.
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const PREFIX = `mamitdemo:v${SCHEMA_VERSION}:`;
 
 function isBrowser() {
