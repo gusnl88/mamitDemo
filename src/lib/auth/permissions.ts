@@ -16,15 +16,21 @@ export const PERMISSION = {
 
 export type Permission = (typeof PERMISSION)[keyof typeof PERMISSION];
 
+/**
+ * 백엔드는 어드민 계정 관리 전체를 `ADMIN_MANAGE` 단일 권한으로 묶고
+ * `SUPER_ADMIN`에게만 준다 — "본인 계정만 수정" 같은 별도 권한은
+ * 서버에 없다. `ADMIN_UPDATE_OWN`은 아무 역할에도 배정하지 않는다.
+ */
 export const ROLE_PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
-  SYS_ADMIN: new Set([
+  SUPER_ADMIN: new Set([
     PERMISSION.ADMIN_VIEW,
     PERMISSION.ADMIN_CREATE,
     PERMISSION.ADMIN_UPDATE,
     PERMISSION.ADMIN_DELETE,
   ]),
-  OPS_ADMIN: new Set([PERMISSION.ADMIN_VIEW, PERMISSION.ADMIN_CREATE, PERMISSION.ADMIN_UPDATE]),
-  BIZ_ADMIN: new Set([PERMISSION.ADMIN_VIEW, PERMISSION.ADMIN_UPDATE_OWN]),
+  OPERATOR: new Set([PERMISSION.ADMIN_VIEW]),
+  CONTENT: new Set([PERMISSION.ADMIN_VIEW]),
+  VIEWER: new Set([PERMISSION.ADMIN_VIEW]),
 };
 
 export function hasPermission(role: Role | undefined | null, permission: Permission): boolean {
@@ -34,12 +40,10 @@ export function hasPermission(role: Role | undefined | null, permission: Permiss
 
 /** 백엔드가 강제하는 규칙과 동일하게, `current`가 `target`의 관리자 계정을 수정할 수 있는지 여부. */
 export function canEditAdminAccount(
-  current: { id: number; role: Role },
-  target: { id: number; role: Role },
+  current: { email: string; role: Role },
+  target: { email: string },
 ): boolean {
-  // 서버 로직과 동일: OPS_ADMIN은 기존 SYS_ADMIN 계정을 절대 건드릴 수 없음.
-  if (current.role === "OPS_ADMIN" && target.role === "SYS_ADMIN") return false;
   if (hasPermission(current.role, PERMISSION.ADMIN_UPDATE)) return true;
-  if (hasPermission(current.role, PERMISSION.ADMIN_UPDATE_OWN)) return current.id === target.id;
+  if (hasPermission(current.role, PERMISSION.ADMIN_UPDATE_OWN)) return current.email === target.email;
   return false;
 }

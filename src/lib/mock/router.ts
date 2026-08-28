@@ -13,6 +13,7 @@ import {
   DEFAULT_FAQ_CATEGORIES,
   DEMO_ACCOUNTS,
   DEMO_OTP_CODE,
+  DEMO_MUST_CHANGE_PASSWORD_EMAILS,
   type MemberSeed,
   type MoimSeed,
   type ReportSeed,
@@ -664,34 +665,47 @@ function moveFaq(id: number, direction: "up" | "down") {
 
 // ───────────────────────── 인증 (auth) ─────────────────────────
 
-function requestLoginCode(email: string) {
+function requestLoginCode(email: string, password: string) {
   if (!email) fail("이메일을 입력해 주세요.", "INVALID_EMAIL");
+  if (!password) fail("비밀번호를 입력해 주세요.", "INVALID_PASSWORD");
   return { email, expiresInSeconds: 180 };
 }
 
 function verifyLoginCode(email: string, code: string) {
   if (code !== DEMO_OTP_CODE) fail("인증 코드가 올바르지 않습니다.", "INVALID_CODE");
+  return buildLoginResult(email);
+}
 
+function buildLoginResult(email: string) {
   const existing = users.find((user) => user.email.toLowerCase() === email.toLowerCase());
+  const mustChangePassword = DEMO_MUST_CHANGE_PASSWORD_EMAILS.includes(email.toLowerCase());
+
   if (existing) {
     return {
-      id: existing.id,
-      token: `demo-token-${existing.id}`,
-      refreshToken: `demo-refresh-${existing.id}`,
+      accessToken: `demo-token-${existing.id}`,
+      email: existing.email,
       name: existing.name,
       role: existing.role,
+      permissions: [] as string[],
+      mustChangePassword,
     };
   }
 
-  // 데모 계정 목록에 없는 이메일이면, 모든 기능을 볼 수 있도록 총괄관리자 권한으로 임시 로그인시킨다.
+  // 데모 계정 목록에 없는 이메일이면, 모든 기능을 볼 수 있도록 최고관리자 권한으로 임시 로그인시킨다.
   const fallback = DEMO_ACCOUNTS[0];
   return {
-    id: 999,
-    token: "demo-token-guest",
-    refreshToken: "demo-refresh-guest",
+    accessToken: "demo-token-guest",
+    email,
     name: email.split("@")[0] || fallback.name,
     role: fallback.role,
+    permissions: [] as string[],
+    mustChangePassword,
   };
+}
+
+/** 임시 비밀번호 변경 — 데모에서는 실제 비밀번호를 저장하지 않으므로, 입력값 형식만 확인하고 통과시킨다. */
+function changePassword(email: string) {
+  return { ...buildLoginResult(email), mustChangePassword: false };
 }
 
 // ───────────────────────── 라우팅 ─────────────────────────
@@ -722,27 +736,18 @@ export async function dispatchMockRequest<T>(
 
   // ── auth ──
   if (method === "post" && pathname === "/auth/login") {
-    return { data: requestLoginCode(String(asBody.email ?? "")) as T };
+    return {
+      data: requestLoginCode(String(asBody.email ?? ""), String(asBody.password ?? "")) as T,
+    };
   }
   if (method === "post" && pathname === "/auth/verify-login") {
     return { data: verifyLoginCode(String(asBody.email ?? ""), String(asBody.code ?? "")) as T };
   }
-  if (method === "post" && (pathname === "/auth/logout" || pathname === "/auth/refresh")) {
-    return { data: null as T };
+  if (method === "post" && pathname === "/auth/change-password") {
+    return { data: changePassword(String(asBody.email ?? "")) as T };
   }
-
-  // ── notifications ──
-  if (method === "get" && pathname === "/notifications") {
-    return {
-      data: {
-        notifications: [
-          "새로운 신고가 접수되었습니다.",
-          "이번 주 신규 가입자가 12명 늘었습니다.",
-          "배너 노출 기간이 곧 종료됩니다.",
-        ],
-        serverTime: new Date().toISOString(),
-      } as T,
-    };
+  if (method === "post" && pathname === "/auth/logout") {
+    return { data: null as T };
   }
 
   // ── members ──

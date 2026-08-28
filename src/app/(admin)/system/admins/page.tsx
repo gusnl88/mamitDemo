@@ -52,7 +52,7 @@ interface EditAdminFormValues {
 }
 
 const ROLE_OPTIONS: { value: Role; label: string }[] = (
-  ["SYS_ADMIN", "OPS_ADMIN", "BIZ_ADMIN"] as Role[]
+  ["SUPER_ADMIN", "OPERATOR", "CONTENT", "VIEWER"] as Role[]
 ).map((role) => ({ value: role, label: ROLE_LABEL[role] }));
 
 // 010-0000-0000 / 010-000-0000 형식만 허용.
@@ -102,11 +102,8 @@ function AdminAccountsPage() {
   const canUpdateAny = hasPermission(currentUser?.role, PERMISSION.ADMIN_UPDATE);
   const canDelete = hasPermission(currentUser?.role, PERMISSION.ADMIN_DELETE);
 
-  // 서버 규칙을 클라이언트에서 그대로 반영: OPS_ADMIN은 SYS_ADMIN 역할을 부여할 수 없음.
-  const createRoleOptions =
-    currentUser?.role === "OPS_ADMIN"
-      ? ROLE_OPTIONS.filter((option) => option.value !== "SYS_ADMIN")
-      : ROLE_OPTIONS;
+  // 이 화면에 도달할 수 있는 건 어차피 ADMIN_MANAGE(=SUPER_ADMIN)뿐이라 역할 제한이 없다.
+  const createRoleOptions = ROLE_OPTIONS;
 
   const openCreateModal = () => {
     setCreateOpen(true);
@@ -144,14 +141,11 @@ function AdminAccountsPage() {
     });
   };
 
-  // 수정자가 자기 계정만 수정 가능한 경우(BIZ_ADMIN)에는 아예 숨김 —
+  // 자기 계정만 수정 가능한 경우(ADMIN_MANAGE 없음)에는 아예 숨김 —
   // 서버가 이때 role 값을 조용히 무시하므로, 아무 동작도 안 하는
   // 컨트롤을 보여주면 혼란만 줌.
   const editingShowsRoleField = editingRow ? canUpdateAny : false;
-  const editRoleOptions =
-    currentUser?.role === "OPS_ADMIN"
-      ? ROLE_OPTIONS.filter((option) => option.value !== "SYS_ADMIN")
-      : ROLE_OPTIONS;
+  const editRoleOptions = ROLE_OPTIONS;
 
   const handleUpdate = async () => {
     if (!editingRow) return;
@@ -215,7 +209,7 @@ function AdminAccountsPage() {
       key: "actions",
       render: (_: unknown, row: AdminAccountRow) => {
         const showEdit = currentUser ? canEditAdminAccount(currentUser, row) : false;
-        const showDelete = canDelete && row.id !== currentUser?.id;
+        const showDelete = canDelete && row.email !== currentUser?.email;
 
         if (!showEdit && !showDelete) return null;
 
@@ -356,7 +350,7 @@ function AdminAccountsPage() {
 
 export default function Page() {
   return (
-    <RequireRole roles={["SYS_ADMIN", "OPS_ADMIN", "BIZ_ADMIN"]}>
+    <RequireRole roles={["SUPER_ADMIN"]}>
       <AdminAccountsPage />
     </RequireRole>
   );

@@ -3,7 +3,7 @@
  * lib/mock/storage.ts가 localStorage에 저장해 CRUD 결과를 세션 동안 유지한다.
  */
 
-export type Role = "SYS_ADMIN" | "OPS_ADMIN" | "BIZ_ADMIN";
+export type Role = "SUPER_ADMIN" | "OPERATOR" | "CONTENT" | "VIEWER";
 
 // ───────────────────────── 공통 유틸 ─────────────────────────
 
@@ -474,21 +474,25 @@ export interface AdminUserSeed {
 
 /** 로그인 화면에 안내되는 고정 데모 계정 — 역할별 화면 차이를 보여주기 위한 용도. */
 export const DEMO_ACCOUNTS: { email: string; name: string; role: Role }[] = [
-  { email: "demo-sys@mamit.demo", name: "데모 총괄관리자", role: "SYS_ADMIN" },
-  { email: "demo-ops@mamit.demo", name: "데모 운영관리자", role: "OPS_ADMIN" },
-  { email: "demo-biz@mamit.demo", name: "데모 업무관리자", role: "BIZ_ADMIN" },
+  { email: "demo-super@mamit.demo", name: "데모 최고관리자", role: "SUPER_ADMIN" },
+  { email: "demo-operator@mamit.demo", name: "데모 운영자", role: "OPERATOR" },
+  { email: "demo-content@mamit.demo", name: "데모 콘텐츠관리자", role: "CONTENT" },
+  { email: "demo-viewer@mamit.demo", name: "데모 조회전용", role: "VIEWER" },
 ];
 
 /** 데모 로그인에서는 이메일과 무관하게 이 코드만 통과시킨다. */
 export const DEMO_OTP_CODE = "000000";
 
+/** 이 이메일로 로그인하면 최초 1회 비밀번호 변경 화면으로 강제 이동하는 흐름을 보여준다. */
+export const DEMO_MUST_CHANGE_PASSWORD_EMAILS = ["sys.lee@mamit.demo"];
+
 export function buildAdminUsers(): AdminUserSeed[] {
   const extras: Omit<AdminUserSeed, "id">[] = [
-    { name: "김운영", email: "ops.kim@mamit.demo", phone: "010-2222-3333", role: "OPS_ADMIN" },
-    { name: "박업무", email: "biz.park@mamit.demo", phone: "010-3333-4444", role: "BIZ_ADMIN" },
-    { name: "이총괄", email: "sys.lee@mamit.demo", phone: null, role: "SYS_ADMIN" },
-    { name: "최운영", email: "ops.choi@mamit.demo", phone: "010-4444-5555", role: "OPS_ADMIN" },
-    { name: "정업무", email: "biz.jung@mamit.demo", phone: null, role: "BIZ_ADMIN" },
+    { name: "김운영", email: "ops.kim@mamit.demo", phone: "010-2222-3333", role: "OPERATOR" },
+    { name: "박콘텐츠", email: "content.park@mamit.demo", phone: "010-3333-4444", role: "CONTENT" },
+    { name: "이총괄", email: "sys.lee@mamit.demo", phone: null, role: "SUPER_ADMIN" },
+    { name: "최운영", email: "ops.choi@mamit.demo", phone: "010-4444-5555", role: "OPERATOR" },
+    { name: "정조회", email: "view.jung@mamit.demo", phone: null, role: "VIEWER" },
   ];
 
   const all = [

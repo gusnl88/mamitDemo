@@ -4,16 +4,17 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Alert, Button, Card, Checkbox, Form, Input, Typography } from "antd";
-import { MailOutlined } from "@ant-design/icons";
+import { LockOutlined, MailOutlined } from "@ant-design/icons";
 import { apiClient } from "@/lib/api/client";
 import { useAuthStore } from "@/store/useAuthStore";
-import { DEMO_ACCOUNTS, DEMO_OTP_CODE } from "@/lib/mock/seed";
-import type { Role } from "@/types/auth";
+import { DEMO_ACCOUNTS, DEMO_MUST_CHANGE_PASSWORD_EMAILS, DEMO_OTP_CODE } from "@/lib/mock/seed";
+import type { AuthUser } from "@/types/auth";
 
 const REMEMBERED_EMAIL_KEY = "mamit-remembered-email";
 
-interface EmailStepValues {
+interface PasswordStepValues {
   email: string;
+  password: string;
   rememberEmail: boolean;
 }
 
@@ -27,11 +28,12 @@ interface LoginRequestResult {
 }
 
 interface VerifyLoginResult {
-  id: number;
-  token: string;
-  refreshToken: string;
+  accessToken: string;
+  email: string;
   name: string;
-  role: Role;
+  role: AuthUser["role"];
+  permissions: string[];
+  mustChangePassword: boolean;
 }
 
 const formatCountdown = (totalSeconds: number) => {
@@ -44,7 +46,7 @@ export default function LoginPage() {
   const router = useRouter();
   const setAuth = useAuthStore((state) => state.setAuth);
 
-  const [step, setStep] = useState<"email" | "code">("email");
+  const [step, setStep] = useState<"password" | "code">("password");
   const [email, setEmail] = useState("");
   const [requesting, setRequesting] = useState(false);
   const [verifying, setVerifying] = useState(false);
@@ -53,15 +55,15 @@ export default function LoginPage() {
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
   const [remainingSeconds, setRemainingSeconds] = useState(0);
 
-  const [emailForm] = Form.useForm<EmailStepValues>();
+  const [passwordForm] = Form.useForm<PasswordStepValues>();
   const [codeForm] = Form.useForm<CodeStepValues>();
 
   useEffect(() => {
     const remembered = localStorage.getItem(REMEMBERED_EMAIL_KEY);
     if (remembered) {
-      emailForm.setFieldsValue({ email: remembered, rememberEmail: true });
+      passwordForm.setFieldsValue({ email: remembered, rememberEmail: true });
     }
-  }, [emailForm]);
+  }, [passwordForm]);
 
   // 만료 시각(expiresAt)이 정해지면 1초마다 남은 시간을 갱신 — 초기값은 이걸
   // 트리거한 이벤트 핸들러에서 이미 세팅해두므로, 여기선 구독(타이머)만 건다.
@@ -75,18 +77,19 @@ export default function LoginPage() {
     return () => clearInterval(timer);
   }, [expiresAt]);
 
-  const requestVerificationCode = async (targetEmail: string) => {
+  const requestVerificationCode = async (targetEmail: string, password: string) => {
     const { data } = await apiClient.post<LoginRequestResult>("/auth/login", {
       email: targetEmail,
+      password,
     });
     setExpiresAt(Date.now() + data.expiresInSeconds * 1000);
     setRemainingSeconds(data.expiresInSeconds);
   };
 
-  const handleEmailSubmit = async (values: EmailStepValues) => {
+  const handlePasswordSubmit = async (values: PasswordStepValues) => {
     setRequesting(true);
     try {
-      await requestVerificationCode(values.email);
+      await requestVerificationCode(values.email, values.password);
 
       if (values.rememberEmail) {
         localStorage.setItem(REMEMBERED_EMAIL_KEY, values.email);
@@ -110,8 +113,14 @@ export default function LoginPage() {
         email,
         code: values.code,
       });
-      setAuth(data.token, data.refreshToken, { id: data.id, name: data.name, role: data.role });
-      router.replace("/dashboard");
+      setAuth(data.accessToken, {
+        email: data.email,
+        name: data.name,
+        role: data.role,
+        permissions: data.permissions,
+        mustChangePassword: data.mustChangePassword,
+      });
+      router.replace(data.mustChangePassword ? "/change-password" : "/dashboard");
     } catch {
       // 인터셉터가 이미 에러 메시지를 표시함
     } finally {
@@ -122,7 +131,8 @@ export default function LoginPage() {
   const handleResend = async () => {
     setResending(true);
     try {
-      await requestVerificationCode(email);
+      const { password } = passwordForm.getFieldsValue();
+      await requestVerificationCode(email, password);
     } catch {
       // 인터셉터가 이미 에러 메시지를 표시함
     } finally {
@@ -130,11 +140,11 @@ export default function LoginPage() {
     }
   };
 
-  const handleBackToEmail = () => {
+  const handleBackToPassword = () => {
     codeForm.resetFields();
     setExpiresAt(null);
     setRemainingSeconds(0);
-    setStep("email");
+    setStep("password");
   };
 
   const expired = remainingSeconds <= 0;
@@ -164,11 +174,11 @@ export default function LoginPage() {
           관리자 로그인
         </Typography.Text>
 
-        {step === "email" ? (
-          <Form<EmailStepValues>
-            form={emailForm}
+        {step === "password" ? (
+          <Form<PasswordStepValues>
+            form={passwordForm}
             layout="vertical"
-            onFinish={handleEmailSubmit}
+            onFinish={handlePasswordSubmit}
             autoComplete="off"
             initialValues={{ rememberEmail: false }}
           >
@@ -179,8 +189,9 @@ export default function LoginPage() {
               title="데모 환경 안내"
               description={
                 <>
-                  실제 이메일 발송 없이 인증 코드는 항상 <strong>{DEMO_OTP_CODE}</strong>입니다.
-                  아래 계정으로 로그인하면 역할별 화면 차이를 확인할 수 있어요.
+                  비밀번호는 아무 값이나 입력해도 통과하며, 실제 이메일 발송 없이 인증 코드는 항상{" "}
+                  <strong>{DEMO_OTP_CODE}</strong>입니다. 아래 계정으로 로그인하면 역할별 화면 차이를
+                  확인할 수 있어요.
                   <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
                     {DEMO_ACCOUNTS.map((account) => (
                       <li key={account.email}>
@@ -188,7 +199,9 @@ export default function LoginPage() {
                       </li>
                     ))}
                   </ul>
-                  다른 이메일을 입력해도 총괄관리자 권한으로 로그인됩니다.
+                  <strong>{DEMO_MUST_CHANGE_PASSWORD_EMAILS[0]}</strong> 계정으로 로그인하면 최초
+                  비밀번호 변경 화면도 확인할 수 있어요. 다른 이메일을 입력해도 최고관리자 권한으로
+                  로그인됩니다.
                 </>
               }
             />
@@ -198,6 +211,13 @@ export default function LoginPage() {
               rules={[{ required: true, type: "email", message: "이메일을 입력해 주세요." }]}
             >
               <Input prefix={<MailOutlined />} placeholder="이메일" size="large" />
+            </Form.Item>
+            <Form.Item
+              name="password"
+              label="비밀번호"
+              rules={[{ required: true, message: "비밀번호를 입력해 주세요." }]}
+            >
+              <Input.Password prefix={<LockOutlined />} placeholder="비밀번호" size="large" />
             </Form.Item>
             <Form.Item name="rememberEmail" valuePropName="checked" style={{ marginBottom: 12 }}>
               <Checkbox>이메일 저장</Checkbox>
@@ -264,8 +284,8 @@ export default function LoginPage() {
               </Button>
             </Form.Item>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <Button type="link" style={{ padding: 0 }} onClick={handleBackToEmail}>
-                이메일 다시 입력
+              <Button type="link" style={{ padding: 0 }} onClick={handleBackToPassword}>
+                이메일/비밀번호 다시 입력
               </Button>
               <Button type="link" style={{ padding: 0 }} loading={resending} onClick={handleResend}>
                 다시 받기

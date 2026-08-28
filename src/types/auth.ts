@@ -1,13 +1,16 @@
-export type Role = "SYS_ADMIN" | "OPS_ADMIN" | "BIZ_ADMIN";
+export type Role = "SUPER_ADMIN" | "OPERATOR" | "CONTENT" | "VIEWER";
 
 export const ROLE_LABEL: Record<Role, string> = {
-  SYS_ADMIN: "총괄관리자",
-  OPS_ADMIN: "운영관리자",
-  BIZ_ADMIN: "업무관리자",
+  SUPER_ADMIN: "최고관리자",
+  OPERATOR: "운영자",
+  CONTENT: "콘텐츠관리자",
+  VIEWER: "조회전용",
 };
 
 export interface AuthUser {
-  id: number;
+  email: string;
   name: string;
   role: Role;
+  permissions: string[];
+  mustChangePassword: boolean;
 }

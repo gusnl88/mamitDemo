@@ -6,9 +6,10 @@ export interface RoleTagProps {
 }
 
 const ROLE_COLOR: Record<Role, string> = {
-  SYS_ADMIN: "gold",
-  OPS_ADMIN: "blue",
-  BIZ_ADMIN: "default",
+  SUPER_ADMIN: "gold",
+  OPERATOR: "blue",
+  CONTENT: "purple",
+  VIEWER: "default",
 };
 
 /** 일관된 색상의 역할 배지, 사용자 `Role`을 표시하는 곳이면 어디서든 재사용. */

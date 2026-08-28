@@ -34,7 +34,9 @@ export const MENU_ITEMS: MenuEntry[] = [
     label: "관리자 계정",
     icon: <TeamOutlined />,
     path: "/system/admins",
-    roles: ["SYS_ADMIN", "OPS_ADMIN", "BIZ_ADMIN"],
+    // 어드민 계정 관리는 서버에서 ADMIN_MANAGE 권한 하나로 묶여 있고, 기본 역할 중엔
+    // SUPER_ADMIN만 갖는다.
+    roles: ["SUPER_ADMIN"],
   },
   { key: "settings", label: "설정", icon: <SettingOutlined />, path: "/settings" },
 ];
