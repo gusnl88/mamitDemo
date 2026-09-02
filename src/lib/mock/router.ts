@@ -32,7 +32,10 @@ import {
 const members = loadCollection<MemberSeed>("members", buildMembers(MEMBER_COUNT));
 const moims = loadCollection<MoimSeed>(
   "moims",
-  buildMoims(MOIM_COUNT, members.map((member) => member.id)),
+  buildMoims(
+    MOIM_COUNT,
+    members.map((member) => member.id),
+  ),
 );
 const reports = loadCollection<ReportSeed>(
   "reports",
@@ -108,7 +111,8 @@ function applySort<T extends Record<string, unknown>>(
       else if (av == null) cmp = -1;
       else if (bv == null) cmp = 1;
       else if (typeof av === "string" && typeof bv === "string") cmp = av.localeCompare(bv, "ko");
-      else if (typeof av === "boolean" && typeof bv === "boolean") cmp = av === bv ? 0 : av ? 1 : -1;
+      else if (typeof av === "boolean" && typeof bv === "boolean")
+        cmp = av === bv ? 0 : av ? 1 : -1;
       else if (av < bv) cmp = -1;
       else if (av > bv) cmp = 1;
       if (cmp !== 0) return desc ? -cmp : cmp;
@@ -168,7 +172,10 @@ function listMembers(search: URLSearchParams) {
     "createdAt",
   );
   const { content, ...rest } = paginate(sorted, page, size);
-  return { content: content.map((item) => toMemberListItem(item as unknown as MemberSeed)), ...rest };
+  return {
+    content: content.map((item) => toMemberListItem(item as unknown as MemberSeed)),
+    ...rest,
+  };
 }
 
 function membershipsForUser(id: number) {
@@ -235,7 +242,10 @@ function listMoims(search: URLSearchParams) {
   const size = Number(search.get("size") ?? 20);
 
   const filtered = keyword ? moims.filter((moim) => moim.name.includes(keyword)) : moims;
-  const withDerived = filtered.map((moim) => ({ ...moim, memberCount: activeMembers(moim).length }));
+  const withDerived = filtered.map((moim) => ({
+    ...moim,
+    memberCount: activeMembers(moim).length,
+  }));
   const sorted = applySort(withDerived as unknown as Record<string, unknown>[], search.get("sort"));
   const { content, ...rest } = paginate(sorted, page, size);
   return { content: content.map((item) => toMoimListItem(item as unknown as MoimSeed)), ...rest };
@@ -357,7 +367,9 @@ function listBanners(search: URLSearchParams) {
   const size = Number(search.get("size") ?? 20);
 
   const withStatus = banners.map(toBannerRow);
-  const filtered = keyword ? withStatus.filter((banner) => banner.title.includes(keyword)) : withStatus;
+  const filtered = keyword
+    ? withStatus.filter((banner) => banner.title.includes(keyword))
+    : withStatus;
   const sorted = applySort(filtered as unknown as Record<string, unknown>[], search.get("sort"));
   const { content, ...rest } = paginate(sorted, page, size);
   return { content, ...rest };
@@ -429,7 +441,8 @@ function setBannerActive(id: number, active: boolean) {
 function moveBanner(id: number, direction: "up" | "down") {
   const banner = banners.find((item) => item.id === id);
   if (!banner) fail("존재하지 않는 배너입니다.", "BANNER_NOT_FOUND");
-  if (banner.displayOrder == null) fail("비노출 상태인 배너는 순서를 바꿀 수 없습니다.", "BANNER_INACTIVE");
+  if (banner.displayOrder == null)
+    fail("비노출 상태인 배너는 순서를 바꿀 수 없습니다.", "BANNER_INACTIVE");
 
   const siblings = banners
     .filter((item) => item.category === banner.category && item.displayOrder != null)
@@ -451,8 +464,10 @@ async function uploadBannerImage(body: unknown) {
   if (!(body instanceof FormData)) fail("잘못된 업로드 요청입니다.", "INVALID_UPLOAD");
   const file = (body as FormData).get("file");
   if (!(file instanceof File)) fail("업로드할 파일이 없습니다.", "INVALID_UPLOAD");
-  if (!file.type.startsWith("image/")) fail("이미지 파일만 업로드할 수 있습니다.", "INVALID_FILE_TYPE");
-  if (file.size > 5 * 1024 * 1024) fail("이미지 파일은 5MB 이하만 업로드할 수 있습니다.", "FILE_TOO_LARGE");
+  if (!file.type.startsWith("image/"))
+    fail("이미지 파일만 업로드할 수 있습니다.", "INVALID_FILE_TYPE");
+  if (file.size > 5 * 1024 * 1024)
+    fail("이미지 파일은 5MB 이하만 업로드할 수 있습니다.", "FILE_TOO_LARGE");
 
   const imageUrl = await readFileAsDataUrl(file);
   return { imageUrl };
@@ -583,7 +598,11 @@ function listFaqs(search: URLSearchParams) {
   const filtered = keyword
     ? faqs.filter((faq) => faq.question.includes(keyword) || faq.category.includes(keyword))
     : faqs;
-  const sorted = applySort(filtered as unknown as Record<string, unknown>[], search.get("sort"), "displayOrder");
+  const sorted = applySort(
+    filtered as unknown as Record<string, unknown>[],
+    search.get("sort"),
+    "displayOrder",
+  );
   return paginate(sorted as unknown as FaqSeed[], page, size);
 }
 
@@ -668,7 +687,13 @@ function moveFaq(id: number, direction: "up" | "down") {
 function requestLoginCode(email: string, password: string) {
   if (!email) fail("이메일을 입력해 주세요.", "INVALID_EMAIL");
   if (!password) fail("비밀번호를 입력해 주세요.", "INVALID_PASSWORD");
-  return { email, expiresInSeconds: 180 };
+  return { email, expiresInSeconds: 5 };
+}
+
+/** 인증번호 재발송 — 유효시간이 남아 있어도, 만료됐어도 이메일만으로 다시 보낼 수 있다(기획). */
+function resendLoginCode(email: string) {
+  if (!email) fail("이메일을 입력해 주세요.", "INVALID_EMAIL");
+  return { email, expiresInSeconds: 5 };
 }
 
 function verifyLoginCode(email: string, code: string) {
@@ -739,6 +764,9 @@ export async function dispatchMockRequest<T>(
     return {
       data: requestLoginCode(String(asBody.email ?? ""), String(asBody.password ?? "")) as T,
     };
+  }
+  if (method === "post" && pathname === "/auth/resend") {
+    return { data: resendLoginCode(String(asBody.email ?? "")) as T };
   }
   if (method === "post" && pathname === "/auth/verify-login") {
     return { data: verifyLoginCode(String(asBody.email ?? ""), String(asBody.code ?? "")) as T };

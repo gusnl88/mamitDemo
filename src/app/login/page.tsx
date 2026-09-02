@@ -77,13 +77,17 @@ export default function LoginPage() {
     return () => clearInterval(timer);
   }, [expiresAt]);
 
+  const applyExpiry = (expiresInSeconds: number) => {
+    setExpiresAt(Date.now() + expiresInSeconds * 1000);
+    setRemainingSeconds(expiresInSeconds);
+  };
+
   const requestVerificationCode = async (targetEmail: string, password: string) => {
     const { data } = await apiClient.post<LoginRequestResult>("/auth/login", {
       email: targetEmail,
       password,
     });
-    setExpiresAt(Date.now() + data.expiresInSeconds * 1000);
-    setRemainingSeconds(data.expiresInSeconds);
+    applyExpiry(data.expiresInSeconds);
   };
 
   const handlePasswordSubmit = async (values: PasswordStepValues) => {
@@ -131,8 +135,8 @@ export default function LoginPage() {
   const handleResend = async () => {
     setResending(true);
     try {
-      const { password } = passwordForm.getFieldsValue();
-      await requestVerificationCode(email, password);
+      const { data } = await apiClient.post<LoginRequestResult>("/auth/resend", { email });
+      applyExpiry(data.expiresInSeconds);
     } catch {
       // 인터셉터가 이미 에러 메시지를 표시함
     } finally {
@@ -190,8 +194,8 @@ export default function LoginPage() {
               description={
                 <>
                   비밀번호는 아무 값이나 입력해도 통과하며, 실제 이메일 발송 없이 인증 코드는 항상{" "}
-                  <strong>{DEMO_OTP_CODE}</strong>입니다. 아래 계정으로 로그인하면 역할별 화면 차이를
-                  확인할 수 있어요.
+                  <strong>{DEMO_OTP_CODE}</strong>입니다. 아래 계정으로 로그인하면 역할별 화면
+                  차이를 확인할 수 있어요.
                   <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
                     {DEMO_ACCOUNTS.map((account) => (
                       <li key={account.email}>
@@ -238,7 +242,10 @@ export default function LoginPage() {
             <Typography.Paragraph style={{ textAlign: "center", marginBottom: 16 }}>
               <strong>{email}</strong>로 인증 코드를 보냈습니다.
               <br />
-              (데모 환경: 인증 코드는 항상 <strong>{DEMO_OTP_CODE}</strong>입니다)
+              (데모 환경: 인증 코드는 항상 <strong>{DEMO_OTP_CODE}</strong>입니다.)
+              <br />
+              <br />
+              (데모 환경: 인증시간은 짤게 설정되어 있어요. 실제 환경에서는 5분 설정 입니다.)
               <br />
               {expired ? (
                 <span style={{ color: "#ff4d4f" }}>
