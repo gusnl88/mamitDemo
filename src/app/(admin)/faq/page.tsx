@@ -1,42 +1,25 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import useSWR from "swr";
-import {
-  App,
-  Button,
-  Form,
-  Input,
-  Modal,
-  Popconfirm,
-  Select,
-  Space,
-  Tag,
-  Typography,
-} from "antd";
-import { ArrowDownOutlined, ArrowUpOutlined, PlusOutlined, TagsOutlined } from "@ant-design/icons";
+import { App, Button, Form, Input, Modal, Popconfirm, Space, Switch } from "antd";
+import type { FormInstance } from "antd";
+import { PlusOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { DataTable } from "@/components/table/DataTable";
-import type { SortSpec } from "@/components/table/DataTable";
 import { ErrorAlert } from "@/components/common/ErrorAlert";
 import { apiClient } from "@/lib/api/client";
 import { ApiError } from "@/types/api";
 
+/** 실제 admin API(FaqResponse)와 동일. */
 interface FaqRow {
   id: number;
   category: string;
   question: string;
   answer: string;
-  displayOrder: number;
+  isActive: boolean;
   createdAt: string;
-}
-
-interface FaqPageResponse {
-  content: FaqRow[];
-  page: number;
-  size: number;
-  totalElements: number;
-  totalPages: number;
+  updatedAt: string;
 }
 
 interface FaqFormValues {
@@ -45,88 +28,36 @@ interface FaqFormValues {
   answer: string;
 }
 
-const PAGE_SIZE = 10;
-
-const formatDate = (value: string) => dayjs(value).format("YYYY-MM-DD");
-
-/** DataTable의 정렬 상태 → 백엔드 `sort` 쿼리 문자열("-displayOrder,question" 형식). */
-const toSortParam = (sorts: SortSpec[]) =>
-  sorts.map((sort) => (sort.order === "descend" ? `-${sort.key}` : sort.key)).join(",");
+const formatDateTime = (value: string) => dayjs(value).format("YYYY-MM-DD HH:mm");
 
 export default function FaqPage() {
   const { message } = App.useApp();
-  const [page, setPage] = useState(1);
+
+  // 실제 admin API(AdminFaqController.list)는 페이지네이션도 keyword 검색도 없다
+  // (전체를 id 역순으로 준다) — 그래서 클라이언트에서 직접 필터링한다.
+  const { data, error, isLoading, mutate } = useSWR<FaqRow[]>("/faqs");
   const [keyword, setKeyword] = useState("");
-  const [sorts, setSorts] = useState<SortSpec[]>([]);
 
-  const query = new URLSearchParams({ page: String(page), size: String(PAGE_SIZE) });
-  if (keyword) query.set("keyword", keyword);
-  const sortParam = toSortParam(sorts);
-  if (sortParam) query.set("sort", sortParam);
-
-  const { data, error, isLoading, mutate } = useSWR<FaqPageResponse>(`/faq?${query.toString()}`);
-  const { data: categories, mutate: mutateCategories } = useSWR<string[]>("/faq/categories");
-
-  const handleSearchChange = (value: string) => {
-    setKeyword(value);
-    setPage(1);
-  };
-
-  const handleSortChange = (nextSorts: SortSpec[]) => {
-    setSorts(nextSorts);
-    setPage(1);
-  };
-
-  const categoryOptions = (categories ?? []).map((category) => ({
-    value: category,
-    label: category,
-  }));
-
-  // ---------- 카테고리 관리 ----------
-  const [categoryModalOpen, setCategoryModalOpen] = useState(false);
-  const [newCategory, setNewCategory] = useState("");
-  const [addingCategory, setAddingCategory] = useState(false);
-
-  const handleAddCategory = async () => {
-    const name = newCategory.trim();
-    if (!name) return;
-    try {
-      setAddingCategory(true);
-      await apiClient.post("/faq/categories", { name });
-      message.success("카테고리가 추가되었습니다.");
-      setNewCategory("");
-      await mutateCategories();
-    } catch (err) {
-      if (err instanceof ApiError) return;
-    } finally {
-      setAddingCategory(false);
-    }
-  };
-
-  const handleRemoveCategory = async (name: string) => {
-    try {
-      await apiClient.delete(`/faq/categories/${encodeURIComponent(name)}`);
-      message.success("카테고리가 삭제되었습니다.");
-      await mutateCategories();
-    } catch (err) {
-      if (err instanceof ApiError) return;
-    }
-  };
+  const filteredRows = useMemo(() => {
+    const rows = data ?? [];
+    if (!keyword.trim()) return rows;
+    const lower = keyword.trim().toLowerCase();
+    return rows.filter(
+      (row) =>
+        row.category.toLowerCase().includes(lower) || row.question.toLowerCase().includes(lower),
+    );
+  }, [data, keyword]);
 
   // ---------- 등록 ----------
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createForm] = Form.useForm<FaqFormValues>();
 
-  const openCreateModal = () => {
-    setCreateOpen(true);
-  };
-
   const handleCreate = async () => {
     try {
       const values = await createForm.validateFields();
       setCreating(true);
-      await apiClient.post("/faq", values);
+      await apiClient.post("/faqs", values);
       message.success("FAQ가 등록되었습니다.");
       await mutate();
       setCreateOpen(false);
@@ -156,7 +87,7 @@ export default function FaqPage() {
     try {
       const values = await editForm.validateFields();
       setUpdating(true);
-      await apiClient.put(`/faq/${editingRow.id}`, values);
+      await apiClient.patch(`/faqs/${editingRow.id}`, values);
       message.success("FAQ가 수정되었습니다.");
       await mutate();
       setEditingRow(null);
@@ -167,9 +98,10 @@ export default function FaqPage() {
     }
   };
 
+  // ---------- 삭제/노출 토글 ----------
   const handleDelete = async (row: FaqRow) => {
     try {
-      await apiClient.delete(`/faq/${row.id}`);
+      await apiClient.delete(`/faqs/${row.id}`);
       message.success("FAQ가 삭제되었습니다.");
       await mutate();
     } catch (err) {
@@ -177,9 +109,10 @@ export default function FaqPage() {
     }
   };
 
-  const handleMove = async (row: FaqRow, direction: "up" | "down") => {
+  const handleToggleActive = async (row: FaqRow, isActive: boolean) => {
     try {
-      await apiClient.patch(`/faq/${row.id}/move-${direction}`);
+      await apiClient.put(`/faqs/${row.id}/active`, { isActive });
+      message.success(isActive ? "FAQ를 노출 처리했습니다." : "FAQ를 비노출 처리했습니다.");
       await mutate();
     } catch (err) {
       if (err instanceof ApiError) return;
@@ -191,44 +124,27 @@ export default function FaqPage() {
       title: "카테고리",
       dataIndex: "category",
       key: "category",
-      render: (category: string) => <Tag>{category}</Tag>,
-      sorter: { multiple: 1 },
+      sorter: (a: FaqRow, b: FaqRow) => a.category.localeCompare(b.category, "ko"),
     },
-    { title: "질문", dataIndex: "question", key: "question", sorter: { multiple: 2 } },
     {
-      title: "답변",
-      dataIndex: "answer",
-      key: "answer",
-      render: (answer: string) => (
-        <Typography.Text ellipsis={{ tooltip: answer }} style={{ maxWidth: 320, display: "block" }}>
-          {answer}
-        </Typography.Text>
+      title: "질문",
+      dataIndex: "question",
+      key: "question",
+      sorter: (a: FaqRow, b: FaqRow) => a.question.localeCompare(b.question, "ko"),
+    },
+    {
+      title: "노출",
+      key: "active",
+      render: (_: unknown, row: FaqRow) => (
+        <Switch checked={row.isActive} onChange={(checked) => handleToggleActive(row, checked)} />
       ),
     },
     {
-      title: "노출순서",
-      dataIndex: "displayOrder",
-      key: "displayOrder",
-      render: (order: number, row: FaqRow) => (
-        <Space size={4}>
-          {order}
-          <Button size="small" type="text" icon={<ArrowUpOutlined />} onClick={() => handleMove(row, "up")} />
-          <Button
-            size="small"
-            type="text"
-            icon={<ArrowDownOutlined />}
-            onClick={() => handleMove(row, "down")}
-          />
-        </Space>
-      ),
-      sorter: { multiple: 3 },
-    },
-    {
-      title: "등록일",
-      dataIndex: "createdAt",
-      key: "createdAt",
-      render: formatDate,
-      sorter: { multiple: 4 },
+      title: "수정일",
+      dataIndex: "updatedAt",
+      key: "updatedAt",
+      render: formatDateTime,
+      sorter: (a: FaqRow, b: FaqRow) => a.updatedAt.localeCompare(b.updatedAt),
     },
     {
       title: "관리",
@@ -253,62 +169,46 @@ export default function FaqPage() {
     },
   ];
 
+  const renderForm = (form: FormInstance<FaqFormValues>) => (
+    <Form<FaqFormValues> form={form} layout="vertical">
+      <Form.Item
+        name="category"
+        label="카테고리"
+        rules={[{ required: true, message: "카테고리를 입력해 주세요." }, { max: 50 }]}
+      >
+        <Input placeholder="예: 계정" />
+      </Form.Item>
+      <Form.Item
+        name="question"
+        label="질문"
+        rules={[{ required: true, message: "질문을 입력해 주세요." }, { max: 300 }]}
+      >
+        <Input placeholder="질문" />
+      </Form.Item>
+      <Form.Item name="answer" label="답변" rules={[{ required: true, message: "답변을 입력해 주세요." }]}>
+        <Input.TextArea placeholder="답변" rows={4} />
+      </Form.Item>
+    </Form>
+  );
+
   return (
     <>
       {error && <ErrorAlert message="FAQ 목록을 불러오지 못했습니다." onRetry={() => mutate()} />}
       <DataTable<FaqRow>
-        title="고객센터(FAQ) 관리"
-        searchPlaceholder="질문/카테고리 검색"
+        title="고객센터(FAQ)"
+        searchPlaceholder="카테고리/질문 검색"
         searchValue={keyword}
-        onSearchChange={handleSearchChange}
+        onSearchChange={setKeyword}
         actions={
-          <Space>
-            <Button icon={<TagsOutlined />} onClick={() => setCategoryModalOpen(true)}>
-              카테고리 관리
-            </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
-              등록
-            </Button>
-          </Space>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+            등록
+          </Button>
         }
         rowKey="id"
         columns={columns}
-        dataSource={data?.content ?? []}
+        dataSource={filteredRows}
         loading={isLoading}
-        serverSide
-        total={data?.totalElements}
-        page={page}
-        pageSize={PAGE_SIZE}
-        onPageChange={setPage}
-        onSortChange={handleSortChange}
       />
-
-      <Modal
-        title="카테고리 관리"
-        open={categoryModalOpen}
-        onCancel={() => setCategoryModalOpen(false)}
-        footer={null}
-        destroyOnHidden
-      >
-        <div style={{ marginBottom: 16, display: "flex", flexWrap: "wrap", gap: 8 }}>
-          {(categories ?? []).map((category) => (
-            <Tag key={category} closable onClose={() => handleRemoveCategory(category)}>
-              {category}
-            </Tag>
-          ))}
-        </div>
-        <Space.Compact style={{ width: "100%" }}>
-          <Input
-            placeholder="새 카테고리 이름"
-            value={newCategory}
-            onChange={(event) => setNewCategory(event.target.value)}
-            onPressEnter={handleAddCategory}
-          />
-          <Button type="primary" loading={addingCategory} onClick={handleAddCategory}>
-            추가
-          </Button>
-        </Space.Compact>
-      </Modal>
 
       <Modal
         title="FAQ 등록"
@@ -320,29 +220,7 @@ export default function FaqPage() {
         okText="등록"
         cancelText="취소"
       >
-        <Form<FaqFormValues> form={createForm} layout="vertical">
-          <Form.Item
-            name="category"
-            label="카테고리"
-            rules={[{ required: true, message: "카테고리를 선택해 주세요." }]}
-          >
-            <Select placeholder="카테고리 선택" options={categoryOptions} />
-          </Form.Item>
-          <Form.Item
-            name="question"
-            label="질문"
-            rules={[{ required: true, message: "질문을 입력해 주세요." }]}
-          >
-            <Input placeholder="질문" />
-          </Form.Item>
-          <Form.Item
-            name="answer"
-            label="답변"
-            rules={[{ required: true, message: "답변을 입력해 주세요." }]}
-          >
-            <Input.TextArea placeholder="답변" rows={4} />
-          </Form.Item>
-        </Form>
+        {renderForm(createForm)}
       </Modal>
 
       <Modal
@@ -355,29 +233,7 @@ export default function FaqPage() {
         okText="저장"
         cancelText="취소"
       >
-        <Form<FaqFormValues> form={editForm} layout="vertical">
-          <Form.Item
-            name="category"
-            label="카테고리"
-            rules={[{ required: true, message: "카테고리를 선택해 주세요." }]}
-          >
-            <Select placeholder="카테고리 선택" options={categoryOptions} />
-          </Form.Item>
-          <Form.Item
-            name="question"
-            label="질문"
-            rules={[{ required: true, message: "질문을 입력해 주세요." }]}
-          >
-            <Input placeholder="질문" />
-          </Form.Item>
-          <Form.Item
-            name="answer"
-            label="답변"
-            rules={[{ required: true, message: "답변을 입력해 주세요." }]}
-          >
-            <Input.TextArea placeholder="답변" rows={4} />
-          </Form.Item>
-        </Form>
+        {renderForm(editForm)}
       </Modal>
     </>
   );

@@ -10,7 +10,6 @@ import {
   buildTerms,
   buildAdminUsers,
   buildFaqs,
-  DEFAULT_FAQ_CATEGORIES,
   DEMO_ACCOUNTS,
   DEMO_OTP_CODE,
   DEMO_MUST_CHANGE_PASSWORD_EMAILS,
@@ -49,7 +48,6 @@ const banners = loadCollection<BannerSeed>("banners", buildBanners());
 const terms = loadCollection<TermsSeed>("terms", buildTerms());
 const users = loadCollection<AdminUserSeed>("users", buildAdminUsers());
 const faqs = loadCollection<FaqSeed>("faqs", buildFaqs());
-const faqCategories = loadCollection<string>("faqCategories", DEFAULT_FAQ_CATEGORIES);
 
 const persist = {
   members: () => saveCollection("members", members),
@@ -59,7 +57,6 @@ const persist = {
   terms: () => saveCollection("terms", terms),
   users: () => saveCollection("users", users),
   faqs: () => saveCollection("faqs", faqs),
-  faqCategories: () => saveCollection("faqCategories", faqCategories),
 };
 
 // ───────────────────────── 공통 유틸 ─────────────────────────
@@ -330,18 +327,16 @@ function getReportDetail(id: number) {
   return reportWithNames(report);
 }
 
-function processReport(id: number, status: ReportSeed["status"], adminComment?: string) {
+/** 실제 admin API(AdminReportProcessRequest)와 동일 — 액션은 승인/거절 둘뿐, 검토중 전환 API는 없다. */
+function processReport(id: number, action: "APPROVE" | "REJECT", comment?: string) {
   const report = reports.find((item) => item.id === id);
   if (!report) fail("존재하지 않는 신고입니다.", "REPORT_NOT_FOUND");
 
   const isTerminal = report.status === "APPROVED" || report.status === "REJECTED";
   if (isTerminal) fail("이미 처리 완료된 신고입니다.", "REPORT_ALREADY_PROCESSED");
-  if (report.status !== "NEW" && status === "UNDER_REVIEW") {
-    fail("검토중 전환은 신규 접수 상태에서만 가능합니다.", "INVALID_STATUS_TRANSITION");
-  }
 
-  report.status = status;
-  report.adminComment = adminComment ?? null;
+  report.status = action === "APPROVE" ? "APPROVED" : "REJECTED";
+  report.adminComment = comment ?? null;
   report.processedAt = new Date().toISOString();
   persist.reports();
   return reportWithNames(report);
@@ -474,57 +469,101 @@ async function uploadBannerImage(body: unknown) {
 }
 
 // ───────────────────────── 약관 (terms) ─────────────────────────
+// 실제 admin API(AdminTermsController)와 동일 — 기존 행은 절대 수정하지 않고, 같은 code로
+// 새 버전 행을 추가하는 개정 이력 모델. 페이지네이션·검색 없음(code별 전체 이력을 다 준다).
 
-function listTerms(search: URLSearchParams) {
-  const keyword = search.get("keyword");
-  const page = Number(search.get("page") ?? 1);
-  const size = Number(search.get("size") ?? 20);
+/** code별로 "발효일이 지난 것 중 가장 최신" 버전이 지금 앱에 보이는 버전(active)이다. */
+function computeActiveTermsIds(): Set<number> {
+  const now = new Date().toISOString();
+  const byCode = new Map<string, TermsSeed[]>();
+  terms.forEach((term) => {
+    const list = byCode.get(term.code) ?? [];
+    list.push(term);
+    byCode.set(term.code, list);
+  });
 
-  const filtered = keyword
-    ? terms.filter((term) => term.title.includes(keyword) || term.code.includes(keyword))
-    : terms;
-  const sorted = applySort(filtered as unknown as Record<string, unknown>[], search.get("sort"));
-  return paginate(sorted as unknown as TermsSeed[], page, size);
+  const activeIds = new Set<number>();
+  byCode.forEach((versions) => {
+    const eligible = versions
+      .filter((term) => term.effectiveAt <= now)
+      .sort((a, b) => b.effectiveAt.localeCompare(a.effectiveAt));
+    if (eligible.length > 0) activeIds.add(eligible[0].id);
+  });
+  return activeIds;
 }
 
-function createTerms(body: Record<string, unknown>) {
-  const code = String(body.code ?? "");
-  const version = String(body.version ?? "");
-  if (terms.some((term) => term.code === code && term.version === version)) {
-    fail("이미 존재하는 코드+버전 조합입니다.", "DUPLICATE_TERMS_VERSION");
+function listTerms() {
+  const activeIds = computeActiveTermsIds();
+  return [...terms]
+    .sort((a, b) => a.code.localeCompare(b.code) || b.effectiveAt.localeCompare(a.effectiveAt))
+    .map((term) => ({ ...term, isActive: activeIds.has(term.id) }));
+}
+
+/**
+ * 개정본 등록 — 새 code를 처음 만들 때도, 기존 code에 새 버전을 추가할 때도 같은 API.
+ * 새 code면 title·required가 필수(이어받을 게 없음), 기존 code면 생략 시 최신본에서 이어받는다.
+ */
+function addTermsVersion(code: string, body: unknown) {
+  if (!(body instanceof FormData)) fail("잘못된 업로드 요청입니다.", "INVALID_UPLOAD");
+  const form = body;
+
+  const version = String(form.get("version") ?? "");
+  if (!code) fail("약관 코드는 필수입니다.", "VALIDATION_FAILED");
+  if (!version) fail("버전은 필수입니다.", "VALIDATION_FAILED");
+
+  const file = form.get("file");
+  if (!(file instanceof File)) fail("약관 문서를 첨부해 주세요.", "VALIDATION_FAILED");
+
+  const history = terms
+    .filter((term) => term.code === code)
+    .sort((a, b) => b.effectiveAt.localeCompare(a.effectiveAt));
+  if (history.some((term) => term.version === version)) {
+    fail(`이미 등록된 버전입니다: ${version}`, "DUPLICATE_TERMS_VERSION");
   }
+
+  const titleRaw = form.get("title");
+  const requiredRaw = form.get("required");
+  if (history.length === 0 && (!titleRaw || requiredRaw === null)) {
+    fail("새 약관은 title과 required를 함께 보내야 합니다.", "VALIDATION_FAILED");
+  }
+
+  const latest = history[0];
+  const title = titleRaw ? String(titleRaw) : latest.title;
+  const required = requiredRaw !== null ? requiredRaw === "true" : latest.required;
+  const effectiveAtRaw = form.get("effectiveAt");
+  const effectiveAt = effectiveAtRaw ? String(effectiveAtRaw) : new Date().toISOString();
+
   const term: TermsSeed = {
     id: nextId(terms),
     code,
-    title: String(body.title ?? ""),
+    title,
     version,
-    required: Boolean(body.required),
-    contentUrl: (body.contentUrl as string) || null,
-    effectiveAt: String(body.effectiveAt ?? new Date().toISOString()),
+    required,
+    contentUrl: "", // 파일을 읽어 data URL로 채운다(아래).
+    effectiveAt,
     createdAt: new Date().toISOString(),
     agreementLocked: false,
   };
   terms.push(term);
   persist.terms();
-  return term;
+  return { term, file };
 }
 
-function updateTerms(id: number, body: Record<string, unknown>) {
-  const term = terms.find((item) => item.id === id);
-  if (!term) fail("존재하지 않는 약관입니다.", "TERMS_NOT_FOUND");
-  term.title = String(body.title ?? term.title);
-  term.required = Boolean(body.required);
-  term.contentUrl = (body.contentUrl as string) || null;
-  term.effectiveAt = String(body.effectiveAt ?? term.effectiveAt);
+async function finalizeTermsVersion(code: string, body: unknown) {
+  const { term, file } = addTermsVersion(code, body);
+  term.contentUrl = await readFileAsDataUrl(file);
   persist.terms();
-  return term;
+  const activeIds = computeActiveTermsIds();
+  return { ...term, isActive: activeIds.has(term.id) };
 }
 
-function deleteTerms(id: number) {
-  const index = terms.findIndex((item) => item.id === id);
-  if (index === -1) fail("존재하지 않는 약관입니다.", "TERMS_NOT_FOUND");
+function deleteTermsVersion(code: string, version: string) {
+  const index = terms.findIndex((term) => term.code === code && term.version === version);
+  if (index === -1) {
+    fail(`해당 약관 버전을 찾을 수 없습니다: ${code} v${version}`, "TERMS_NOT_FOUND");
+  }
   if (terms[index].agreementLocked) {
-    fail("이 약관에 대한 회원 동의 기록이 있어 삭제할 수 없습니다.", "TERMS_IN_USE");
+    fail("이미 동의한 사용자가 있어 삭제할 수 없습니다. 새 개정본을 올려 대체하세요.", "TERMS_IN_USE");
   }
   terms.splice(index, 1);
   persist.terms();
@@ -589,97 +628,56 @@ function deleteUser(id: number) {
 }
 
 // ───────────────────────── 고객센터 FAQ ─────────────────────────
+// 실제 admin API(AdminFaqController)와 동일 — 페이지네이션·검색 없음, id 역순 전체 목록.
+// 카테고리는 자유 문자열이라 별도 카테고리 관리 API가 없다.
 
-function listFaqs(search: URLSearchParams) {
-  const keyword = search.get("keyword");
-  const page = Number(search.get("page") ?? 1);
-  const size = Number(search.get("size") ?? 20);
-
-  const filtered = keyword
-    ? faqs.filter((faq) => faq.question.includes(keyword) || faq.category.includes(keyword))
-    : faqs;
-  const sorted = applySort(
-    filtered as unknown as Record<string, unknown>[],
-    search.get("sort"),
-    "displayOrder",
-  );
-  return paginate(sorted as unknown as FaqSeed[], page, size);
-}
-
-function createFaqCategory(name: string) {
-  if (faqCategories.some((category) => category.toLowerCase() === name.toLowerCase())) {
-    fail("이미 존재하는 카테고리입니다.", "DUPLICATE_FAQ_CATEGORY");
-  }
-  faqCategories.push(name);
-  persist.faqCategories();
-  return [...faqCategories];
-}
-
-function deleteFaqCategory(name: string) {
-  if (faqs.some((faq) => faq.category === name)) {
-    fail("해당 카테고리를 사용 중인 FAQ가 있어 삭제할 수 없습니다.", "FAQ_CATEGORY_IN_USE");
-  }
-  const index = faqCategories.indexOf(name);
-  if (index === -1) fail("존재하지 않는 카테고리입니다.", "FAQ_CATEGORY_NOT_FOUND");
-  faqCategories.splice(index, 1);
-  persist.faqCategories();
-  return [...faqCategories];
+function listFaqs(category: string | null) {
+  const filtered = category ? faqs.filter((faq) => faq.category === category) : faqs;
+  return [...filtered].sort((a, b) => b.id - a.id);
 }
 
 function createFaq(body: Record<string, unknown>) {
-  const maxOrder = faqs.reduce((max, faq) => Math.max(max, faq.displayOrder), 0);
+  const now = new Date().toISOString();
   const faq: FaqSeed = {
     id: nextId(faqs),
     category: String(body.category ?? ""),
     question: String(body.question ?? ""),
     answer: String(body.answer ?? ""),
-    displayOrder: maxOrder + 1,
-    createdAt: new Date().toISOString(),
+    isActive: true,
+    createdAt: now,
+    updatedAt: now,
   };
   faqs.push(faq);
   persist.faqs();
   return faq;
 }
 
+/** null인 필드는 변경하지 않음(부분 수정) — 실제 API와 동일. */
 function updateFaq(id: number, body: Record<string, unknown>) {
   const faq = faqs.find((item) => item.id === id);
   if (!faq) fail("존재하지 않는 FAQ입니다.", "FAQ_NOT_FOUND");
-  faq.category = String(body.category ?? faq.category);
-  faq.question = String(body.question ?? faq.question);
-  faq.answer = String(body.answer ?? faq.answer);
+  if (body.category != null) faq.category = String(body.category);
+  if (body.question != null) faq.question = String(body.question);
+  if (body.answer != null) faq.answer = String(body.answer);
+  faq.updatedAt = new Date().toISOString();
   persist.faqs();
   return faq;
 }
 
-function renumberFaqs() {
-  faqs
-    .sort((a, b) => a.displayOrder - b.displayOrder)
-    .forEach((faq, index) => {
-      faq.displayOrder = index + 1;
-    });
+function changeFaqActiveStatus(id: number, isActive: boolean) {
+  const faq = faqs.find((item) => item.id === id);
+  if (!faq) fail("존재하지 않는 FAQ입니다.", "FAQ_NOT_FOUND");
+  faq.isActive = isActive;
+  faq.updatedAt = new Date().toISOString();
+  persist.faqs();
+  return faq;
 }
 
 function deleteFaq(id: number) {
   const index = faqs.findIndex((item) => item.id === id);
   if (index === -1) fail("존재하지 않는 FAQ입니다.", "FAQ_NOT_FOUND");
   faqs.splice(index, 1);
-  renumberFaqs();
   persist.faqs();
-}
-
-function moveFaq(id: number, direction: "up" | "down") {
-  const sorted = [...faqs].sort((a, b) => a.displayOrder - b.displayOrder);
-  const index = sorted.findIndex((item) => item.id === id);
-  if (index === -1) fail("존재하지 않는 FAQ입니다.", "FAQ_NOT_FOUND");
-  const swapIndex = direction === "up" ? index - 1 : index + 1;
-  if (swapIndex < 0 || swapIndex >= sorted.length) {
-    return sorted[index];
-  }
-  const temp = sorted[index].displayOrder;
-  sorted[index].displayOrder = sorted[swapIndex].displayOrder;
-  sorted[swapIndex].displayOrder = temp;
-  persist.faqs();
-  return sorted[index];
 }
 
 // ───────────────────────── 인증 (auth) ─────────────────────────
@@ -795,12 +793,12 @@ export async function dispatchMockRequest<T>(
   if (method === "get" && (idMatch = match("/reports/:id", pathname))) {
     return { data: getReportDetail(Number(idMatch[0])) as T };
   }
-  if (method === "patch" && (idMatch = match("/reports/:id/process", pathname))) {
+  if (method === "post" && (idMatch = match("/reports/:id/process", pathname))) {
     return {
       data: processReport(
         Number(idMatch[0]),
-        asBody.status as ReportSeed["status"],
-        asBody.adminComment as string | undefined,
+        asBody.action as "APPROVE" | "REJECT",
+        asBody.comment as string | undefined,
       ) as T,
     };
   }
@@ -829,14 +827,19 @@ export async function dispatchMockRequest<T>(
   }
 
   // ── terms ──
-  if (method === "get" && pathname === "/terms") return { data: listTerms(search) as T };
-  if (method === "post" && pathname === "/terms") return { data: createTerms(asBody) as T };
-  if (method === "put" && (idMatch = match("/terms/:id", pathname))) {
-    return { data: updateTerms(Number(idMatch[0]), asBody) as T };
+  if (method === "get" && pathname === "/terms") return { data: listTerms() as T };
+  {
+    const addVersionMatch = /^\/terms\/([^/]+)\/versions$/.exec(pathname);
+    if (method === "post" && addVersionMatch) {
+      return { data: (await finalizeTermsVersion(decodeURIComponent(addVersionMatch[1]), body)) as T };
+    }
   }
-  if (method === "delete" && (idMatch = match("/terms/:id", pathname))) {
-    deleteTerms(Number(idMatch[0]));
-    return { data: null as T };
+  {
+    const versionMatch = /^\/terms\/([^/]+)\/versions\/([^/]+)$/.exec(pathname);
+    if (method === "delete" && versionMatch) {
+      deleteTermsVersion(decodeURIComponent(versionMatch[1]), decodeURIComponent(versionMatch[2]));
+      return { data: null as T };
+    }
   }
 
   // ── users (admin accounts) ──
@@ -851,25 +854,15 @@ export async function dispatchMockRequest<T>(
   }
 
   // ── FAQ ──
-  if (method === "get" && pathname === "/faq/categories") return { data: [...faqCategories] as T };
-  if (method === "post" && pathname === "/faq/categories") {
-    return { data: createFaqCategory(String(asBody.name ?? "")) as T };
+  if (method === "get" && pathname === "/faqs") return { data: listFaqs(search.get("category")) as T };
+  if (method === "post" && pathname === "/faqs") return { data: createFaq(asBody) as T };
+  if (method === "put" && (idMatch = match("/faqs/:id/active", pathname))) {
+    return { data: changeFaqActiveStatus(Number(idMatch[0]), Boolean(asBody.isActive)) as T };
   }
-  if (method === "delete" && (idMatch = match("/faq/categories/:id", pathname))) {
-    return { data: deleteFaqCategory(decodeURIComponent(idMatch[0])) as T };
-  }
-  if (method === "get" && pathname === "/faq") return { data: listFaqs(search) as T };
-  if (method === "post" && pathname === "/faq") return { data: createFaq(asBody) as T };
-  if (method === "patch" && (idMatch = match("/faq/:id/move-up", pathname))) {
-    return { data: moveFaq(Number(idMatch[0]), "up") as T };
-  }
-  if (method === "patch" && (idMatch = match("/faq/:id/move-down", pathname))) {
-    return { data: moveFaq(Number(idMatch[0]), "down") as T };
-  }
-  if (method === "put" && (idMatch = match("/faq/:id", pathname))) {
+  if (method === "patch" && (idMatch = match("/faqs/:id", pathname))) {
     return { data: updateFaq(Number(idMatch[0]), asBody) as T };
   }
-  if (method === "delete" && (idMatch = match("/faq/:id", pathname))) {
+  if (method === "delete" && (idMatch = match("/faqs/:id", pathname))) {
     deleteFaq(Number(idMatch[0]));
     return { data: null as T };
   }

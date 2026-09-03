@@ -21,6 +21,9 @@ type ReportType =
 
 type ReportStatus = "NEW" | "UNDER_REVIEW" | "APPROVED" | "REJECTED";
 
+/** 실제 admin API(AdminReportProcessRequest.Action)와 동일 — 승인/거절 둘뿐, 검토중 전환 API는 없다. */
+type ReportAction = "APPROVE" | "REJECT";
+
 interface ReportListItem {
   id: number;
   type: ReportType;
@@ -98,7 +101,7 @@ export default function ReportsPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [memberDetailId, setMemberDetailId] = useState<number | null>(null);
 
-  const [nextStatus, setNextStatus] = useState<ReportStatus | null>(null);
+  const [nextAction, setNextAction] = useState<ReportAction | null>(null);
   const [adminComment, setAdminComment] = useState("");
   const [processing, setProcessing] = useState(false);
 
@@ -123,7 +126,7 @@ export default function ReportsPage() {
     setDetailId(id);
     setDetail(null);
     setAdminComment("");
-    setNextStatus(null);
+    setNextAction(null);
     setDetailLoading(true);
     try {
       const { data: detailData } = await apiClient.get<ReportDetail>(`/reports/${id}`);
@@ -144,26 +147,18 @@ export default function ReportsPage() {
 
   const isTerminal = detail?.status === "APPROVED" || detail?.status === "REJECTED";
 
-  // 실제 신고 도메인 규칙과 동일: 검토중 전환은 신규 접수 상태에서만 가능.
-  const availableStatusOptions: { value: ReportStatus; label: string }[] =
-    detail?.status === "NEW"
-      ? [
-          { value: "UNDER_REVIEW", label: "검토중으로 변경" },
-          { value: "APPROVED", label: "승인" },
-          { value: "REJECTED", label: "거절" },
-        ]
-      : [
-          { value: "APPROVED", label: "승인" },
-          { value: "REJECTED", label: "거절" },
-        ];
+  const actionOptions: { value: ReportAction; label: string }[] = [
+    { value: "APPROVE", label: "승인" },
+    { value: "REJECT", label: "거절" },
+  ];
 
   const handleProcess = async () => {
-    if (!detail || !nextStatus) return;
+    if (!detail || !nextAction) return;
     setProcessing(true);
     try {
-      await apiClient.patch(`/reports/${detail.id}/process`, {
-        status: nextStatus,
-        adminComment: adminComment || undefined,
+      await apiClient.post(`/reports/${detail.id}/process`, {
+        action: nextAction,
+        comment: adminComment || undefined,
       });
       message.success("신고 처리 결과가 저장되었습니다.");
       await mutate();
@@ -240,7 +235,7 @@ export default function ReportsPage() {
         onOk={handleProcess}
         okText="처리 저장"
         cancelText="닫기"
-        okButtonProps={{ disabled: !nextStatus || isTerminal, loading: processing }}
+        okButtonProps={{ disabled: !nextAction || isTerminal, loading: processing }}
         destroyOnHidden
         style={{ top: 20 }}
         styles={{ body: { maxHeight: "calc(100vh - 220px)", overflowY: "auto" } }}
@@ -285,12 +280,12 @@ export default function ReportsPage() {
                 </div>
               ) : (
                 <Space orientation="vertical" style={{ width: "100%" }}>
-                  <Select<ReportStatus>
+                  <Select<ReportAction>
                     placeholder="처리 결과 선택"
                     style={{ width: "100%" }}
-                    value={nextStatus ?? undefined}
-                    onChange={setNextStatus}
-                    options={availableStatusOptions}
+                    value={nextAction ?? undefined}
+                    onChange={setNextAction}
+                    options={actionOptions}
                   />
                   <Input.TextArea
                     placeholder="처리 코멘트 (선택)"

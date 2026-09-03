@@ -397,13 +397,14 @@ export function buildBanners(): BannerSeed[] {
 
 // ───────────────────────── 약관 (terms) ─────────────────────────
 
+/** 실제 admin API(AdminTermsResponse)와 동일 — code별로 여러 버전(개정 이력) 행이 존재. */
 export interface TermsSeed {
   id: number;
   code: string;
   title: string;
   version: string;
   required: boolean;
-  contentUrl: string | null;
+  contentUrl: string;
   effectiveAt: string;
   createdAt: string;
   agreementLocked: boolean; // true면 "회원 동의 기록 있음" 상태를 시뮬레이션 (삭제 불가)
@@ -510,16 +511,16 @@ export function buildAdminUsers(): AdminUserSeed[] {
 
 // ───────────────────────── 고객센터 FAQ ─────────────────────────
 
+/** 실제 admin API(FaqResponse)와 동일 — 카테고리는 자유 문자열, 순서변경 없음. */
 export interface FaqSeed {
   id: number;
   category: string;
   question: string;
   answer: string;
-  displayOrder: number;
+  isActive: boolean;
   createdAt: string;
+  updatedAt: string;
 }
-
-export const DEFAULT_FAQ_CATEGORIES = ["서비스 이용", "모임", "회원/계정", "결제", "기타"];
 
 const FAQ_DEFS: { category: string; question: string; answer: string }[] = [
   {
@@ -619,7 +620,8 @@ export function buildFaqs(): FaqSeed[] {
   return FAQ_DEFS.map((def, index) => ({
     ...def,
     id: index + 1,
-    displayOrder: index + 1,
+    isActive: true,
     createdAt: now,
+    updatedAt: now,
   }));
 }
