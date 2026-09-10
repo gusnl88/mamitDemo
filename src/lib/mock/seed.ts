@@ -105,9 +105,7 @@ export function buildMembers(count: number): MemberSeed[] {
       nickname: makeNickname(usedNames),
       profileImageUrl: null,
       realName: hasRealInfo ? `${pick(SURNAMES)}${pick(GIVEN)}` : null,
-      phoneNumber: hasRealInfo
-        ? `010-${randomInt(1000, 9999)}-${randomInt(1000, 9999)}`
-        : null,
+      phoneNumber: hasRealInfo ? `010-${randomInt(1000, 9999)}-${randomInt(1000, 9999)}` : null,
       createdAt: isoDaysAgo(createdDaysAgo),
       lastLoginAt: everLoggedIn ? isoDaysAgo(randomInt(0, 30)) : null,
       status: withdrawn ? "WITHDRAWN" : "ACTIVE",
@@ -182,7 +180,11 @@ const STATUS_POOL: MoimSeed["status"][] = [
   "DELETED",
 ];
 
-function buildMembership(userId: number, role: MoimMemberRole, moimAgeDays: number): MoimMembership {
+function buildMembership(
+  userId: number,
+  role: MoimMemberRole,
+  moimAgeDays: number,
+): MoimMembership {
   const joinedDaysAgo = randomInt(0, moimAgeDays);
   const joinedAt = isoDaysAgo(joinedDaysAgo);
   // OWNER는 자기 모임을 나가지 않는다고 가정 — MEMBER만 일부 탈퇴/강퇴 처리.
@@ -465,13 +467,33 @@ export function buildTerms(): TermsSeed[] {
 
 // ───────────────────────── 관리자 계정 (admin users) ─────────────────────────
 
+/** 실제 admin API(AdminAccountResponse)와 동일 — phone 없음, 상태·임시비밀번호·최근로그인 포함. */
 export interface AdminUserSeed {
   id: number;
   name: string;
   email: string;
-  phone: string | null;
   role: Role;
+  status: "ACTIVE" | "SUSPENDED";
+  mustChangePassword: boolean;
+  lastLoginAt: string | null;
 }
+
+/** 실제 API처럼 권한은 역할에서 파생된다(계정마다 따로 저장하지 않음). */
+export const ROLE_PERMISSIONS: Record<Role, string[]> = {
+  SUPER_ADMIN: [
+    "ADMIN_MANAGE",
+    "MEMBER_READ",
+    "MOIM_READ",
+    "REPORT_READ",
+    "REPORT_PROCESS",
+    "BANNER_WRITE",
+    "FAQ_WRITE",
+    "TERMS_WRITE",
+  ],
+  OPERATOR: ["MEMBER_READ", "MOIM_READ", "REPORT_READ", "REPORT_PROCESS"],
+  CONTENT: ["MOIM_READ", "BANNER_WRITE", "FAQ_WRITE", "TERMS_WRITE"],
+  VIEWER: ["MEMBER_READ", "MOIM_READ", "REPORT_READ"],
+};
 
 /** 로그인 화면에 안내되는 고정 데모 계정 — 역할별 화면 차이를 보여주기 위한 용도. */
 export const DEMO_ACCOUNTS: { email: string; name: string; role: Role }[] = [
@@ -489,19 +511,56 @@ export const DEMO_MUST_CHANGE_PASSWORD_EMAILS = ["sys.lee@mamit.demo"];
 
 export function buildAdminUsers(): AdminUserSeed[] {
   const extras: Omit<AdminUserSeed, "id">[] = [
-    { name: "김운영", email: "ops.kim@mamit.demo", phone: "010-2222-3333", role: "OPERATOR" },
-    { name: "박콘텐츠", email: "content.park@mamit.demo", phone: "010-3333-4444", role: "CONTENT" },
-    { name: "이총괄", email: "sys.lee@mamit.demo", phone: null, role: "SUPER_ADMIN" },
-    { name: "최운영", email: "ops.choi@mamit.demo", phone: "010-4444-5555", role: "OPERATOR" },
-    { name: "정조회", email: "view.jung@mamit.demo", phone: null, role: "VIEWER" },
+    {
+      name: "김운영",
+      email: "ops.kim@mamit.demo",
+      role: "OPERATOR",
+      status: "ACTIVE",
+      mustChangePassword: false,
+      lastLoginAt: isoDaysAgo(2),
+    },
+    {
+      name: "박콘텐츠",
+      email: "content.park@mamit.demo",
+      role: "CONTENT",
+      status: "ACTIVE",
+      mustChangePassword: false,
+      lastLoginAt: isoDaysAgo(5),
+    },
+    {
+      name: "이총괄",
+      email: "sys.lee@mamit.demo",
+      role: "SUPER_ADMIN",
+      status: "ACTIVE",
+      mustChangePassword: true,
+      lastLoginAt: null,
+    },
+    {
+      name: "최운영",
+      email: "ops.choi@mamit.demo",
+      role: "OPERATOR",
+      status: "SUSPENDED",
+      mustChangePassword: false,
+      lastLoginAt: isoDaysAgo(40),
+    },
+    {
+      name: "정조회",
+      email: "view.jung@mamit.demo",
+      role: "VIEWER",
+      status: "ACTIVE",
+      mustChangePassword: false,
+      lastLoginAt: isoDaysAgo(10),
+    },
   ];
 
   const all = [
     ...DEMO_ACCOUNTS.map((account) => ({
       name: account.name,
       email: account.email,
-      phone: "010-1234-5678",
       role: account.role,
+      status: "ACTIVE" as const,
+      mustChangePassword: false,
+      lastLoginAt: isoDaysAgo(1),
     })),
     ...extras,
   ];
@@ -526,7 +585,8 @@ const FAQ_DEFS: { category: string; question: string; answer: string }[] = [
   {
     category: "서비스 이용",
     question: "마미든든은 어떤 서비스인가요?",
-    answer: "마미든든은 동네 엄마들이 서로 정보를 나누고 소모임을 만들 수 있는 커뮤니티 서비스입니다.",
+    answer:
+      "마미든든은 동네 엄마들이 서로 정보를 나누고 소모임을 만들 수 있는 커뮤니티 서비스입니다.",
   },
   {
     category: "서비스 이용",
@@ -536,17 +596,20 @@ const FAQ_DEFS: { category: string; question: string; answer: string }[] = [
   {
     category: "서비스 이용",
     question: "위치 정보는 왜 필요한가요?",
-    answer: "동네 기반 모임을 추천해 드리기 위해 대략적인 위치 정보를 사용합니다. 정확한 주소는 저장되지 않습니다.",
+    answer:
+      "동네 기반 모임을 추천해 드리기 위해 대략적인 위치 정보를 사용합니다. 정확한 주소는 저장되지 않습니다.",
   },
   {
     category: "모임",
     question: "모임은 어떻게 만드나요?",
-    answer: "홈 화면의 '모임 만들기' 버튼을 눌러 카테고리, 지역, 정원을 설정하면 바로 모임을 개설할 수 있습니다.",
+    answer:
+      "홈 화면의 '모임 만들기' 버튼을 눌러 카테고리, 지역, 정원을 설정하면 바로 모임을 개설할 수 있습니다.",
   },
   {
     category: "모임",
     question: "모임 정원은 나중에 바꿀 수 있나요?",
-    answer: "모임장은 모임 설정 화면에서 언제든 최대 정원을 조정할 수 있습니다. 단, 현재 인원보다 적게 설정할 수는 없습니다.",
+    answer:
+      "모임장은 모임 설정 화면에서 언제든 최대 정원을 조정할 수 있습니다. 단, 현재 인원보다 적게 설정할 수는 없습니다.",
   },
   {
     category: "모임",
@@ -561,17 +624,20 @@ const FAQ_DEFS: { category: string; question: string; answer: string }[] = [
   {
     category: "회원/계정",
     question: "비밀번호 없이 로그인하는 이유가 궁금해요.",
-    answer: "마미든든은 이메일로 발송되는 인증 코드로 로그인하는 방식을 사용해 비밀번호 유출 위험을 없앴습니다.",
+    answer:
+      "마미든든은 이메일로 발송되는 인증 코드로 로그인하는 방식을 사용해 비밀번호 유출 위험을 없앴습니다.",
   },
   {
     category: "회원/계정",
     question: "닉네임은 변경할 수 있나요?",
-    answer: "설정 > 프로필 수정에서 닉네임을 자유롭게 변경할 수 있습니다. 단, 최근 변경 후 7일간은 재변경이 제한됩니다.",
+    answer:
+      "설정 > 프로필 수정에서 닉네임을 자유롭게 변경할 수 있습니다. 단, 최근 변경 후 7일간은 재변경이 제한됩니다.",
   },
   {
     category: "회원/계정",
     question: "회원 탈퇴는 어떻게 하나요?",
-    answer: "설정 > 계정 관리 > 회원 탈퇴에서 진행할 수 있으며, 탈퇴 시 작성한 게시글은 익명 처리됩니다.",
+    answer:
+      "설정 > 계정 관리 > 회원 탈퇴에서 진행할 수 있으며, 탈퇴 시 작성한 게시글은 익명 처리됩니다.",
   },
   {
     category: "회원/계정",
@@ -581,7 +647,8 @@ const FAQ_DEFS: { category: string; question: string; answer: string }[] = [
   {
     category: "결제",
     question: "유료 기능이 있나요?",
-    answer: "기본적인 모임 생성/참여 기능은 모두 무료이며, 프리미엄 배지 등 일부 부가 기능만 유료로 제공됩니다.",
+    answer:
+      "기본적인 모임 생성/참여 기능은 모두 무료이며, 프리미엄 배지 등 일부 부가 기능만 유료로 제공됩니다.",
   },
   {
     category: "결제",
@@ -591,7 +658,8 @@ const FAQ_DEFS: { category: string; question: string; answer: string }[] = [
   {
     category: "결제",
     question: "환불은 어떻게 요청하나요?",
-    answer: "구매하신 앱스토어 또는 플레이스토어의 환불 정책에 따라 각 스토어 고객센터를 통해 요청하실 수 있습니다.",
+    answer:
+      "구매하신 앱스토어 또는 플레이스토어의 환불 정책에 따라 각 스토어 고객센터를 통해 요청하실 수 있습니다.",
   },
   {
     category: "기타",
@@ -601,7 +669,8 @@ const FAQ_DEFS: { category: string; question: string; answer: string }[] = [
   {
     category: "기타",
     question: "광고/제휴 문의는 어디로 하나요?",
-    answer: "하단 '제휴 문의' 메뉴 또는 이메일(partner@mommydndn.com)로 문의해 주시면 담당자가 안내해 드립니다.",
+    answer:
+      "하단 '제휴 문의' 메뉴 또는 이메일(partner@mommydndn.com)로 문의해 주시면 담당자가 안내해 드립니다.",
   },
   {
     category: "기타",

@@ -2,6 +2,7 @@ import { message as staticMessage } from "antd";
 import { getMessageApi } from "@/lib/api/messageBridge";
 import { ApiError } from "@/types/api";
 import { loadCollection, saveCollection, nextId } from "@/lib/mock/storage";
+import { useAuthStore } from "@/store/useAuthStore";
 import {
   buildMembers,
   buildMoims,
@@ -13,6 +14,7 @@ import {
   DEMO_ACCOUNTS,
   DEMO_OTP_CODE,
   DEMO_MUST_CHANGE_PASSWORD_EMAILS,
+  ROLE_PERMISSIONS,
   type MemberSeed,
   type MoimSeed,
   type ReportSeed,
@@ -569,61 +571,99 @@ function deleteTermsVersion(code: string, version: string) {
   persist.terms();
 }
 
-// ───────────────────────── 관리자 계정 (users) ─────────────────────────
+// ───────────────────────── 관리자 계정 (accounts) ─────────────────────────
+// 실제 admin API(AdminAccountController)와 동일 — 셀프 회원가입/수정/삭제가 없다.
+// 등록은 이메일·이름·역할만 받고(휴대폰 없음), 이후로는 역할변경/정지·활성화/임시비밀번호
+// 재발급 세 가지 액션뿐이다. 본인 계정의 역할·상태는 못 바꾸고, 마지막 활성 SUPER_ADMIN은
+// 역할을 바꾸거나 정지할 수 없다.
 
-function listUsers(search: URLSearchParams) {
-  const keyword = search.get("keyword");
-  const page = Number(search.get("page") ?? 1);
-  const size = Number(search.get("size") ?? 20);
-
-  const filtered = keyword
-    ? users.filter(
-        (user) =>
-          user.name.includes(keyword) || user.email.toLowerCase().includes(keyword.toLowerCase()),
-      )
-    : users;
-  const sorted = applySort(filtered as unknown as Record<string, unknown>[], search.get("sort"));
-  return paginate(sorted as unknown as AdminUserSeed[], page, size);
+function currentAdmin(): AdminUserSeed | null {
+  const email = useAuthStore.getState().user?.email;
+  if (!email) return null;
+  return users.find((user) => user.email.toLowerCase() === email.toLowerCase()) ?? null;
 }
 
-function createUser(body: Record<string, unknown>) {
-  const email = String(body.email ?? "");
-  if (users.some((user) => user.email.toLowerCase() === email.toLowerCase())) {
-    fail("이미 등록된 이메일입니다.", "DUPLICATE_EMAIL");
+function ensureNotLastActiveSuperAdmin(target: AdminUserSeed, what: string) {
+  if (target.role !== "SUPER_ADMIN") return;
+  const remaining = users.filter(
+    (user) => user.role === "SUPER_ADMIN" && user.status === "ACTIVE" && user.id !== target.id,
+  ).length;
+  if (remaining === 0) {
+    fail(`마지막 최고 관리자입니다. ${what} 다른 최고 관리자를 먼저 지정해 주세요.`, "VALIDATION_FAILED");
   }
+}
+
+function toAccountResponse(user: AdminUserSeed) {
+  return { ...user, permissions: ROLE_PERMISSIONS[user.role] };
+}
+
+function listAccounts() {
+  return [...users].sort((a, b) => a.id - b.id).map(toAccountResponse);
+}
+
+function createAccount(body: Record<string, unknown>) {
+  const email = String(body.email ?? "").trim().toLowerCase();
+  const name = String(body.name ?? "").trim();
+  const role = body.role as Role;
+  if (!email) fail("이메일은 필수입니다.", "VALIDATION_FAILED");
+  if (!name) fail("이름은 필수입니다.", "VALIDATION_FAILED");
+  if (!role) fail("역할은 필수입니다.", "VALIDATION_FAILED");
+  if (users.some((user) => user.email.toLowerCase() === email)) {
+    fail("이미 등록된 이메일입니다.", "VALIDATION_FAILED");
+  }
+
   const user: AdminUserSeed = {
     id: nextId(users),
-    name: String(body.name ?? ""),
+    name,
     email,
-    phone: (body.phone as string) || null,
-    role: body.role as Role,
+    role,
+    status: "ACTIVE",
+    mustChangePassword: true,
+    lastLoginAt: null,
   };
   users.push(user);
   persist.users();
-  return user;
+  return toAccountResponse(user);
 }
 
-function updateUser(id: number, body: Record<string, unknown>) {
-  const user = users.find((item) => item.id === id);
-  if (!user) fail("존재하지 않는 관리자 계정입니다.", "USER_NOT_FOUND");
-  if (body.email) {
-    const email = String(body.email);
-    if (users.some((item) => item.id !== id && item.email.toLowerCase() === email.toLowerCase())) {
-      fail("이미 등록된 이메일입니다.", "DUPLICATE_EMAIL");
-    }
-    user.email = email;
+function changeAccountRole(targetId: number, role: Role) {
+  const target = users.find((user) => user.id === targetId);
+  if (!target) fail("존재하지 않는 관리자 계정입니다.", "ADMIN_NOT_FOUND");
+
+  const actor = currentAdmin();
+  if (actor && actor.id === target.id) {
+    fail("본인의 역할은 바꿀 수 없습니다. 다른 관리자에게 요청해 주세요.", "VALIDATION_FAILED");
   }
-  user.name = String(body.name ?? user.name);
-  user.phone = (body.phone as string) || null;
-  if (body.role) user.role = body.role as Role;
+  if (target.role !== role) {
+    ensureNotLastActiveSuperAdmin(target, "역할을 바꾸려면");
+  }
+
+  target.role = role;
   persist.users();
-  return user;
+  return toAccountResponse(target);
 }
 
-function deleteUser(id: number) {
-  const index = users.findIndex((item) => item.id === id);
-  if (index === -1) fail("존재하지 않는 관리자 계정입니다.", "USER_NOT_FOUND");
-  users.splice(index, 1);
+function changeAccountStatus(targetId: number, active: boolean) {
+  const target = users.find((user) => user.id === targetId);
+  if (!target) fail("존재하지 않는 관리자 계정입니다.", "ADMIN_NOT_FOUND");
+
+  const actor = currentAdmin();
+  if (actor && actor.id === target.id) {
+    fail("본인 계정은 정지할 수 없습니다.", "VALIDATION_FAILED");
+  }
+  if (!active) {
+    ensureNotLastActiveSuperAdmin(target, "정지하려면");
+  }
+
+  target.status = active ? "ACTIVE" : "SUSPENDED";
+  persist.users();
+  return toAccountResponse(target);
+}
+
+function resetAccountPassword(targetId: number) {
+  const target = users.find((user) => user.id === targetId);
+  if (!target) fail("존재하지 않는 관리자 계정입니다.", "ADMIN_NOT_FOUND");
+  target.mustChangePassword = true;
   persist.users();
 }
 
@@ -701,7 +741,6 @@ function verifyLoginCode(email: string, code: string) {
 
 function buildLoginResult(email: string) {
   const existing = users.find((user) => user.email.toLowerCase() === email.toLowerCase());
-  const mustChangePassword = DEMO_MUST_CHANGE_PASSWORD_EMAILS.includes(email.toLowerCase());
 
   if (existing) {
     return {
@@ -709,8 +748,8 @@ function buildLoginResult(email: string) {
       email: existing.email,
       name: existing.name,
       role: existing.role,
-      permissions: [] as string[],
-      mustChangePassword,
+      permissions: ROLE_PERMISSIONS[existing.role],
+      mustChangePassword: existing.mustChangePassword,
     };
   }
 
@@ -721,13 +760,18 @@ function buildLoginResult(email: string) {
     email,
     name: email.split("@")[0] || fallback.name,
     role: fallback.role,
-    permissions: [] as string[],
-    mustChangePassword,
+    permissions: ROLE_PERMISSIONS[fallback.role],
+    mustChangePassword: DEMO_MUST_CHANGE_PASSWORD_EMAILS.includes(email.toLowerCase()),
   };
 }
 
-/** 임시 비밀번호 변경 — 데모에서는 실제 비밀번호를 저장하지 않으므로, 입력값 형식만 확인하고 통과시킨다. */
+/** 임시 비밀번호 변경 — 데모에서는 실제 비밀번호를 저장하지 않고, mustChangePassword만 실제로 내린다. */
 function changePassword(email: string) {
+  const existing = users.find((user) => user.email.toLowerCase() === email.toLowerCase());
+  if (existing) {
+    existing.mustChangePassword = false;
+    persist.users();
+  }
   return { ...buildLoginResult(email), mustChangePassword: false };
 }
 
@@ -842,14 +886,17 @@ export async function dispatchMockRequest<T>(
     }
   }
 
-  // ── users (admin accounts) ──
-  if (method === "get" && pathname === "/users") return { data: listUsers(search) as T };
-  if (method === "post" && pathname === "/users") return { data: createUser(asBody) as T };
-  if (method === "put" && (idMatch = match("/users/:id", pathname))) {
-    return { data: updateUser(Number(idMatch[0]), asBody) as T };
+  // ── 관리자 계정 (accounts) ──
+  if (method === "get" && pathname === "/accounts") return { data: listAccounts() as T };
+  if (method === "post" && pathname === "/accounts") return { data: createAccount(asBody) as T };
+  if (method === "patch" && (idMatch = match("/accounts/:id/role", pathname))) {
+    return { data: changeAccountRole(Number(idMatch[0]), asBody.role as Role) as T };
   }
-  if (method === "delete" && (idMatch = match("/users/:id", pathname))) {
-    deleteUser(Number(idMatch[0]));
+  if (method === "patch" && (idMatch = match("/accounts/:id/status", pathname))) {
+    return { data: changeAccountStatus(Number(idMatch[0]), Boolean(asBody.active)) as T };
+  }
+  if (method === "post" && (idMatch = match("/accounts/:id/password-reset", pathname))) {
+    resetAccountPassword(Number(idMatch[0]));
     return { data: null as T };
   }
 
