@@ -565,7 +565,10 @@ function deleteTermsVersion(code: string, version: string) {
     fail(`해당 약관 버전을 찾을 수 없습니다: ${code} v${version}`, "TERMS_NOT_FOUND");
   }
   if (terms[index].agreementLocked) {
-    fail("이미 동의한 사용자가 있어 삭제할 수 없습니다. 새 개정본을 올려 대체하세요.", "TERMS_IN_USE");
+    fail(
+      "이미 동의한 사용자가 있어 삭제할 수 없습니다. 새 개정본을 올려 대체하세요.",
+      "TERMS_IN_USE",
+    );
   }
   terms.splice(index, 1);
   persist.terms();
@@ -589,7 +592,10 @@ function ensureNotLastActiveSuperAdmin(target: AdminUserSeed, what: string) {
     (user) => user.role === "SUPER_ADMIN" && user.status === "ACTIVE" && user.id !== target.id,
   ).length;
   if (remaining === 0) {
-    fail(`마지막 최고 관리자입니다. ${what} 다른 최고 관리자를 먼저 지정해 주세요.`, "VALIDATION_FAILED");
+    fail(
+      `마지막 최고 관리자입니다. ${what} 다른 최고 관리자를 먼저 지정해 주세요.`,
+      "VALIDATION_FAILED",
+    );
   }
 }
 
@@ -602,7 +608,9 @@ function listAccounts() {
 }
 
 function createAccount(body: Record<string, unknown>) {
-  const email = String(body.email ?? "").trim().toLowerCase();
+  const email = String(body.email ?? "")
+    .trim()
+    .toLowerCase();
   const name = String(body.name ?? "").trim();
   const role = body.role as Role;
   if (!email) fail("이메일은 필수입니다.", "VALIDATION_FAILED");
@@ -725,7 +733,7 @@ function deleteFaq(id: number) {
 function requestLoginCode(email: string, password: string) {
   if (!email) fail("이메일을 입력해 주세요.", "INVALID_EMAIL");
   if (!password) fail("비밀번호를 입력해 주세요.", "INVALID_PASSWORD");
-  return { email, expiresInSeconds: 5 };
+  return { email, expiresInSeconds: 20 };
 }
 
 /** 인증번호 재발송 — 유효시간이 남아 있어도, 만료됐어도 이메일만으로 다시 보낼 수 있다(기획). */
@@ -875,7 +883,9 @@ export async function dispatchMockRequest<T>(
   {
     const addVersionMatch = /^\/terms\/([^/]+)\/versions$/.exec(pathname);
     if (method === "post" && addVersionMatch) {
-      return { data: (await finalizeTermsVersion(decodeURIComponent(addVersionMatch[1]), body)) as T };
+      return {
+        data: (await finalizeTermsVersion(decodeURIComponent(addVersionMatch[1]), body)) as T,
+      };
     }
   }
   {
@@ -901,7 +911,8 @@ export async function dispatchMockRequest<T>(
   }
 
   // ── FAQ ──
-  if (method === "get" && pathname === "/faqs") return { data: listFaqs(search.get("category")) as T };
+  if (method === "get" && pathname === "/faqs")
+    return { data: listFaqs(search.get("category")) as T };
   if (method === "post" && pathname === "/faqs") return { data: createFaq(asBody) as T };
   if (method === "put" && (idMatch = match("/faqs/:id/active", pathname))) {
     return { data: changeFaqActiveStatus(Number(idMatch[0]), Boolean(asBody.isActive)) as T };
