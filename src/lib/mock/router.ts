@@ -739,7 +739,7 @@ function requestLoginCode(email: string, password: string) {
 /** 인증번호 재발송 — 유효시간이 남아 있어도, 만료됐어도 이메일만으로 다시 보낼 수 있다(기획). */
 function resendLoginCode(email: string) {
   if (!email) fail("이메일을 입력해 주세요.", "INVALID_EMAIL");
-  return { email, expiresInSeconds: 5 };
+  return { email, expiresInSeconds: 20 };
 }
 
 function verifyLoginCode(email: string, code: string) {
