@@ -25,10 +25,23 @@ export const MENU_ITEMS: MenuEntry[] = [
   { key: "dashboard", label: "대시보드", icon: <DashboardOutlined />, path: "/dashboard" },
   { key: "members", label: "회원관리", icon: <UserOutlined />, path: "/members" },
   { key: "meetups", label: "모임관리", icon: <UsergroupAddOutlined />, path: "/meetups" },
-  { key: "reports", label: "신고관리", icon: <FlagOutlined />, path: "/reports" },
+  {
+    key: "reports",
+    label: "신고관리",
+    icon: <FlagOutlined />,
+    path: "/reports",
+    // 콘텐츠관리자(CONTENT)는 신고·약관 메뉴를 쓰지 않는다.
+    roles: ["SUPER_ADMIN", "OPERATOR", "VIEWER"],
+  },
   { key: "banners", label: "배너관리", icon: <PictureOutlined />, path: "/banners" },
   { key: "faq", label: "고객센터(FAQ)", icon: <QuestionCircleOutlined />, path: "/faq" },
-  { key: "terms", label: "약관관리", icon: <FileTextOutlined />, path: "/terms" },
+  {
+    key: "terms",
+    label: "약관관리",
+    icon: <FileTextOutlined />,
+    path: "/terms",
+    roles: ["SUPER_ADMIN", "OPERATOR", "VIEWER"],
+  },
   {
     key: "admins",
     label: "관리자 계정",

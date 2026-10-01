@@ -1,5 +1,6 @@
 "use client";
 
+import { RequireRole } from "@/components/auth/RequireRole";
 import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import { App, Button, DatePicker, Form, Input, Modal, Popconfirm, Space, Switch, Tag, Typography, Upload } from "antd";
@@ -34,7 +35,7 @@ interface AddTermsVersionFormValues {
 
 const formatDateTime = (value: string) => dayjs(value).format("YYYY-MM-DD HH:mm");
 
-export default function TermsPage() {
+function TermsPage() {
   const { message } = App.useApp();
 
   // 실제 admin API(AdminTermsController.list)는 페이지네이션도 keyword 검색도 없다 —
@@ -249,5 +250,13 @@ export default function TermsPage() {
         </Form>
       </Modal>
     </>
+  );
+}
+
+export default function Page() {
+  return (
+    <RequireRole roles={["SUPER_ADMIN", "OPERATOR", "VIEWER"]}>
+      <TermsPage />
+    </RequireRole>
   );
 }

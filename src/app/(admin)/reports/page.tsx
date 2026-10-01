@@ -1,5 +1,6 @@
 "use client";
 
+import { RequireRole } from "@/components/auth/RequireRole";
 import { useState } from "react";
 import useSWR from "swr";
 import { App, Descriptions, Input, Modal, Select, Space, Spin, Tag } from "antd";
@@ -90,7 +91,7 @@ const STATUS_COLOR: Record<ReportStatus, string> = {
 
 const formatDateTime = (value: string | null) => (value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "-");
 
-export default function ReportsPage() {
+function ReportsPage() {
   const { message } = App.useApp();
   const [page, setPage] = useState(1);
   const [keyword, setKeyword] = useState("");
@@ -303,5 +304,13 @@ export default function ReportsPage() {
 
       <MemberDetailModal memberId={memberDetailId} onClose={() => setMemberDetailId(null)} />
     </>
+  );
+}
+
+export default function Page() {
+  return (
+    <RequireRole roles={["SUPER_ADMIN", "OPERATOR", "VIEWER"]}>
+      <ReportsPage />
+    </RequireRole>
   );
 }
