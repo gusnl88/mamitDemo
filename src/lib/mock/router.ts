@@ -345,69 +345,190 @@ function processReport(id: number, action: "APPROVE" | "REJECT", comment?: strin
 }
 
 // ───────────────────────── 배너 (banners) ─────────────────────────
+// 실제 admin API(AdminBannerController)와 동일 — 목록은 페이지네이션·검색 없이 카테고리 → 노출순서로
+// 정렬된 전체를 준다. 등록은 이미지와 함께(/with-image), 노출기간·활성·순서는 각각 별도 API.
+// (카테고리, 노출순서)는 유니크 — 겹치면 실패하고, 비활성 배너는 순서가 비어(null) 있다.
 
-function computeBannerStatus(banner: BannerSeed): "ACTIVE" | "SCHEDULED" | "ENDED" | "INACTIVE" {
-  const today = new Date().toISOString().slice(0, 10);
-  if (banner.endDate < today) return "ENDED";
-  if (!banner.active) return "INACTIVE";
-  if (banner.startDate > today) return "SCHEDULED";
-  return "ACTIVE";
+const BANNER_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+const BANNER_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+/** localStorage 용량(보통 5MB)을 넘지 않도록 업로드 이미지를 이 너비 이하로 줄여서 저장한다. */
+const BANNER_IMAGE_MAX_WIDTH = 1280;
+
+const CATEGORY_ORDER: BannerCategory[] = ["HOME", "MOIM", "CHAT"];
+
+function isBannerVisibleNow(banner: BannerSeed): boolean {
+  if (!banner.isActive) return false;
+  const now = new Date().toISOString();
+  if (banner.displayStartAt && banner.displayStartAt > now) return false;
+  if (banner.displayEndAt && banner.displayEndAt < now) return false;
+  return true;
 }
 
-function toBannerRow(banner: BannerSeed) {
-  return { ...banner, status: computeBannerStatus(banner) };
+function toBannerResponse(banner: BannerSeed) {
+  return { ...banner, visibleNow: isBannerVisibleNow(banner) };
 }
 
-function listBanners(search: URLSearchParams) {
-  const keyword = search.get("keyword");
-  const page = Number(search.get("page") ?? 1);
-  const size = Number(search.get("size") ?? 20);
-
-  const withStatus = banners.map(toBannerRow);
-  const filtered = keyword
-    ? withStatus.filter((banner) => banner.title.includes(keyword))
-    : withStatus;
-  const sorted = applySort(filtered as unknown as Record<string, unknown>[], search.get("sort"));
-  const { content, ...rest } = paginate(sorted, page, size);
-  return { content, ...rest };
+function findBanner(id: number): BannerSeed {
+  const banner = banners.find((item) => item.id === id);
+  if (!banner) fail("존재하지 않는 배너입니다.", "BANNER_NOT_FOUND");
+  return banner;
 }
 
-function maxDisplayOrder(category: BannerCategory): number {
-  return banners
-    .filter((banner) => banner.category === category)
-    .reduce((max, banner) => Math.max(max, banner.displayOrder ?? 0), 0);
+function touchBanner(banner: BannerSeed) {
+  banner.updatedAt = new Date().toISOString();
+  persist.banners();
+  return toBannerResponse(banner);
 }
 
-function createBanner(body: Record<string, unknown>) {
-  const category = body.category as BannerCategory;
+function listBanners() {
+  return [...banners]
+    .sort(
+      (a, b) =>
+        CATEGORY_ORDER.indexOf(a.category) - CATEGORY_ORDER.indexOf(b.category) ||
+        (a.displayOrder ?? Infinity) - (b.displayOrder ?? Infinity) ||
+        a.id - b.id,
+    )
+    .map(toBannerResponse);
+}
+
+function ensureDisplayOrderFree(category: BannerCategory, displayOrder: number, exceptId?: number) {
+  if (!Number.isInteger(displayOrder) || displayOrder < 1) {
+    fail("노출순서는 1 이상의 정수여야 합니다.", "VALIDATION_FAILED");
+  }
+  const taken = banners.some(
+    (item) =>
+      item.category === category && item.displayOrder === displayOrder && item.id !== exceptId,
+  );
+  if (taken) {
+    fail(
+      `같은 카테고리에 이미 노출순서 ${displayOrder}번 배너가 있습니다.`,
+      "BANNER_DISPLAY_ORDER_DUPLICATED",
+    );
+  }
+}
+
+/** 업로드 파일을 검증하고, 크면 줄여서 data URL 로 만든다 (실제 서버의 이미지 업로드 대신). */
+async function bannerImageToDataUrl(file: FormDataEntryValue | null): Promise<string> {
+  if (!(file instanceof File)) fail("배너 이미지를 첨부해 주세요.", "VALIDATION_FAILED");
+  if (!BANNER_IMAGE_TYPES.includes(file.type)) {
+    fail("JPG, PNG, GIF, WEBP 이미지만 업로드할 수 있습니다.", "INVALID_FILE_TYPE");
+  }
+  if (file.size > BANNER_IMAGE_MAX_BYTES) {
+    fail("이미지는 10MB 이하만 업로드할 수 있습니다.", "FILE_TOO_LARGE");
+  }
+
+  try {
+    const bitmap = await createImageBitmap(file);
+    if (bitmap.width <= BANNER_IMAGE_MAX_WIDTH && file.size < 300 * 1024) {
+      bitmap.close();
+      return readFileAsDataUrl(file);
+    }
+    const scale = Math.min(1, BANNER_IMAGE_MAX_WIDTH / bitmap.width);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext("2d")?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    return canvas.toDataURL("image/webp", 0.85);
+  } catch {
+    // 브라우저가 디코딩하지 못하면 원본 그대로 저장한다.
+    return readFileAsDataUrl(file);
+  }
+}
+
+function formText(form: FormData, key: string): string | null {
+  const value = form.get(key);
+  return value == null || value === "" ? null : String(value);
+}
+
+async function createBannerWithImage(body: unknown) {
+  if (!(body instanceof FormData)) fail("잘못된 업로드 요청입니다.", "INVALID_UPLOAD");
+  const category = formText(body, "category") as BannerCategory | null;
+  const title = formText(body, "title");
+  if (!category || !CATEGORY_ORDER.includes(category)) {
+    fail("카테고리를 선택해 주세요.", "VALIDATION_FAILED");
+  }
+  if (!title) fail("타이틀을 입력해 주세요.", "VALIDATION_FAILED");
+  const displayOrder = Number(formText(body, "displayOrder"));
+  ensureDisplayOrderFree(category, displayOrder);
+  const imageUrl = await bannerImageToDataUrl(body.get("image"));
+
+  const now = new Date().toISOString();
   const banner: BannerSeed = {
     id: nextId(banners),
     category,
-    title: String(body.title ?? ""),
-    description: (body.description as string) || null,
-    imageUrl: String(body.imageUrl ?? ""),
-    targetUrl: (body.targetUrl as string) || null,
-    startDate: String(body.startDate ?? ""),
-    endDate: String(body.endDate ?? ""),
-    displayOrder: maxDisplayOrder(category) + 1,
-    active: true,
+    title,
+    description: formText(body, "description"),
+    imageUrl,
+    targetUrl: formText(body, "targetUrl"),
+    displayOrder,
+    isActive: true,
+    displayStartAt: null,
+    displayEndAt: null,
+    createdAt: now,
+    updatedAt: now,
   };
   banners.push(banner);
-  persist.banners();
-  return toBannerRow(banner);
+  return touchBanner(banner);
 }
 
 function updateBanner(id: number, body: Record<string, unknown>) {
-  const banner = banners.find((item) => item.id === id);
-  if (!banner) fail("존재하지 않는 배너입니다.", "BANNER_NOT_FOUND");
-  banner.title = String(body.title ?? banner.title);
+  const banner = findBanner(id);
+  if (!body.title) fail("타이틀을 입력해 주세요.", "VALIDATION_FAILED");
+  banner.title = String(body.title);
   banner.description = (body.description as string) || null;
   banner.imageUrl = String(body.imageUrl ?? banner.imageUrl);
   banner.targetUrl = (body.targetUrl as string) || null;
-  banner.startDate = String(body.startDate ?? banner.startDate);
-  banner.endDate = String(body.endDate ?? banner.endDate);
-  persist.banners();
-  return toBannerRow(banner);
+  return touchBanner(banner);
+}
+
+async function updateBannerWithImage(id: number, body: unknown) {
+  const banner = findBanner(id);
+  if (!(body instanceof FormData)) fail("잘못된 업로드 요청입니다.", "INVALID_UPLOAD");
+  const title = formText(body, "title");
+  if (!title) fail("타이틀을 입력해 주세요.", "VALIDATION_FAILED");
+  const imageUrl = await bannerImageToDataUrl(body.get("image"));
+  banner.title = title;
+  banner.description = formText(body, "description");
+  banner.targetUrl = formText(body, "targetUrl");
+  banner.imageUrl = imageUrl;
+  return touchBanner(banner);
+}
+
+function changeBannerDisplayPeriod(id: number, body: Record<string, unknown>) {
+  const banner = findBanner(id);
+  const start = (body.displayStartAt as string | null) ?? null;
+  const end = (body.displayEndAt as string | null) ?? null;
+  if (start && end && start > end) {
+    fail("노출 종료일은 시작일보다 뒤여야 합니다.", "VALIDATION_FAILED");
+  }
+  banner.displayStartAt = start;
+  banner.displayEndAt = end;
+  return touchBanner(banner);
+}
+
+function activateBanner(id: number, displayOrder: number) {
+  const banner = findBanner(id);
+  if (banner.isActive) fail("이미 활성화된 배너입니다.", "BANNER_ALREADY_ACTIVE");
+  ensureDisplayOrderFree(banner.category, displayOrder, id);
+  banner.isActive = true;
+  banner.displayOrder = displayOrder;
+  return touchBanner(banner);
+}
+
+function deactivateBanner(id: number) {
+  const banner = findBanner(id);
+  banner.isActive = false;
+  banner.displayOrder = null;
+  return touchBanner(banner);
+}
+
+function changeBannerDisplayOrder(id: number, displayOrder: number) {
+  const banner = findBanner(id);
+  if (!banner.isActive) fail("비활성 배너는 순서를 바꿀 수 없습니다.", "BANNER_INACTIVE");
+  ensureDisplayOrderFree(banner.category, displayOrder, id);
+  banner.displayOrder = displayOrder;
+  return touchBanner(banner);
 }
 
 function deleteBanner(id: number) {
@@ -415,59 +536,6 @@ function deleteBanner(id: number) {
   if (index === -1) fail("존재하지 않는 배너입니다.", "BANNER_NOT_FOUND");
   banners.splice(index, 1);
   persist.banners();
-}
-
-function renumberCategory(category: BannerCategory) {
-  banners
-    .filter((banner) => banner.category === category && banner.displayOrder != null)
-    .sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0))
-    .forEach((banner, index) => {
-      banner.displayOrder = index + 1;
-    });
-}
-
-function setBannerActive(id: number, active: boolean) {
-  const banner = banners.find((item) => item.id === id);
-  if (!banner) fail("존재하지 않는 배너입니다.", "BANNER_NOT_FOUND");
-  banner.active = active;
-  banner.displayOrder = active ? maxDisplayOrder(banner.category) + 1 : null;
-  persist.banners();
-  return toBannerRow(banner);
-}
-
-function moveBanner(id: number, direction: "up" | "down") {
-  const banner = banners.find((item) => item.id === id);
-  if (!banner) fail("존재하지 않는 배너입니다.", "BANNER_NOT_FOUND");
-  if (banner.displayOrder == null)
-    fail("비노출 상태인 배너는 순서를 바꿀 수 없습니다.", "BANNER_INACTIVE");
-
-  const siblings = banners
-    .filter((item) => item.category === banner.category && item.displayOrder != null)
-    .sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0));
-  const index = siblings.findIndex((item) => item.id === id);
-  const swapIndex = direction === "up" ? index - 1 : index + 1;
-  if (swapIndex < 0 || swapIndex >= siblings.length) {
-    return toBannerRow(banner); // 이미 맨 위/아래
-  }
-
-  const temp = siblings[index].displayOrder;
-  siblings[index].displayOrder = siblings[swapIndex].displayOrder;
-  siblings[swapIndex].displayOrder = temp;
-  persist.banners();
-  return toBannerRow(banner);
-}
-
-async function uploadBannerImage(body: unknown) {
-  if (!(body instanceof FormData)) fail("잘못된 업로드 요청입니다.", "INVALID_UPLOAD");
-  const file = (body as FormData).get("file");
-  if (!(file instanceof File)) fail("업로드할 파일이 없습니다.", "INVALID_UPLOAD");
-  if (!file.type.startsWith("image/"))
-    fail("이미지 파일만 업로드할 수 있습니다.", "INVALID_FILE_TYPE");
-  if (file.size > 5 * 1024 * 1024)
-    fail("이미지 파일은 5MB 이하만 업로드할 수 있습니다.", "FILE_TOO_LARGE");
-
-  const imageUrl = await readFileAsDataUrl(file);
-  return { imageUrl };
 }
 
 // ───────────────────────── 약관 (terms) ─────────────────────────
@@ -856,19 +924,24 @@ export async function dispatchMockRequest<T>(
   }
 
   // ── banners ──
-  if (method === "post" && pathname === "/banners/upload-image") {
-    return { data: (await uploadBannerImage(body)) as T };
+  if (method === "get" && pathname === "/banners") return { data: listBanners() as T };
+  if (method === "post" && pathname === "/banners/with-image") {
+    return { data: (await createBannerWithImage(body)) as T };
   }
-  if (method === "get" && pathname === "/banners") return { data: listBanners(search) as T };
-  if (method === "post" && pathname === "/banners") return { data: createBanner(asBody) as T };
-  if (method === "patch" && (idMatch = match("/banners/:id/active", pathname))) {
-    return { data: setBannerActive(Number(idMatch[0]), Boolean(asBody.active)) as T };
+  if (method === "put" && (idMatch = match("/banners/:id/with-image", pathname))) {
+    return { data: (await updateBannerWithImage(Number(idMatch[0]), body)) as T };
   }
-  if (method === "patch" && (idMatch = match("/banners/:id/move-up", pathname))) {
-    return { data: moveBanner(Number(idMatch[0]), "up") as T };
+  if (method === "put" && (idMatch = match("/banners/:id/display-period", pathname))) {
+    return { data: changeBannerDisplayPeriod(Number(idMatch[0]), asBody) as T };
   }
-  if (method === "patch" && (idMatch = match("/banners/:id/move-down", pathname))) {
-    return { data: moveBanner(Number(idMatch[0]), "down") as T };
+  if (method === "put" && (idMatch = match("/banners/:id/activate", pathname))) {
+    return { data: activateBanner(Number(idMatch[0]), Number(asBody.displayOrder)) as T };
+  }
+  if (method === "put" && (idMatch = match("/banners/:id/deactivate", pathname))) {
+    return { data: deactivateBanner(Number(idMatch[0])) as T };
+  }
+  if (method === "put" && (idMatch = match("/banners/:id/display-order", pathname))) {
+    return { data: changeBannerDisplayOrder(Number(idMatch[0]), Number(asBody.displayOrder)) as T };
   }
   if (method === "put" && (idMatch = match("/banners/:id", pathname))) {
     return { data: updateBanner(Number(idMatch[0]), asBody) as T };

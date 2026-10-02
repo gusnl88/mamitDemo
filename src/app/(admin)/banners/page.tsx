@@ -1,209 +1,149 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import useSWR from "swr";
-import {
-  App,
-  Button,
-  DatePicker,
-  Form,
-  Image,
-  Input,
-  Modal,
-  Popconfirm,
-  Select,
-  Space,
-  Switch,
-  Tag,
-  Upload,
-} from "antd";
-import { ArrowDownOutlined, ArrowUpOutlined, PlusOutlined, UploadOutlined } from "@ant-design/icons";
-import dayjs from "dayjs";
-import type { Dayjs } from "dayjs";
+import { App, Button, Form, Segmented } from "antd";
+import { PlusOutlined } from "@ant-design/icons";
 import { DataTable } from "@/components/table/DataTable";
-import type { SortSpec } from "@/components/table/DataTable";
 import { ErrorAlert } from "@/components/common/ErrorAlert";
+import { BannerFormModal, type BannerFormValues } from "@/components/banners/BannerFormModal";
+import {
+  CATEGORY_OPTIONS,
+  nextDisplayOrder,
+  orderedInCategory,
+  toDisplayPeriod,
+  toPeriodValue,
+  type BannerCategory,
+  type BannerRow,
+} from "@/components/banners/banner";
+import { useBannerColumns } from "@/components/banners/useBannerColumns";
 import { apiClient } from "@/lib/api/client";
+import { useAuthStore } from "@/store/useAuthStore";
 import { ApiError } from "@/types/api";
 
-type BannerCategory = "HOME" | "MOIM" | "CHAT";
-type BannerStatus = "ACTIVE" | "SCHEDULED" | "ENDED" | "INACTIVE";
-
-interface BannerRow {
-  id: number;
-  category: BannerCategory;
-  title: string;
-  description: string | null;
-  imageUrl: string;
-  targetUrl: string | null;
-  startDate: string;
-  endDate: string;
-  displayOrder: number | null;
-  active: boolean;
-  status: BannerStatus;
-}
-
-interface BannerPageResponse {
-  content: BannerRow[];
-  page: number;
-  size: number;
-  totalElements: number;
-  totalPages: number;
-}
-
-interface CreateBannerFormValues {
-  category: BannerCategory;
-  title: string;
-  description?: string;
-  targetUrl?: string;
-  period: [Dayjs, Dayjs];
-}
-
-interface EditBannerFormValues {
-  title: string;
-  description?: string;
-  targetUrl?: string;
-  period: [Dayjs, Dayjs];
-}
-
-const PAGE_SIZE = 10;
-
-const CATEGORY_LABEL: Record<BannerCategory, string> = {
-  HOME: "홈",
-  MOIM: "모임",
-  CHAT: "채팅",
-};
-const CATEGORY_OPTIONS = (Object.keys(CATEGORY_LABEL) as BannerCategory[]).map((value) => ({
-  value,
-  label: CATEGORY_LABEL[value],
-}));
-
-const STATUS_LABEL: Record<BannerStatus, string> = {
-  ACTIVE: "노출중",
-  SCHEDULED: "노출예정",
-  ENDED: "노출종료",
-  INACTIVE: "비활성",
-};
-
-const STATUS_COLOR: Record<BannerStatus, string> = {
-  ACTIVE: "green",
-  SCHEDULED: "blue",
-  ENDED: "default",
-  INACTIVE: "red",
-};
-
-const formatDate = (value: string) => dayjs(value).format("YYYY-MM-DD");
-
-/** DataTable의 정렬 상태 → 백엔드 `sort` 쿼리 문자열("-status,title" 형식). */
-const toSortParam = (sorts: SortSpec[]) =>
-  sorts.map((sort) => (sort.order === "descend" ? `-${sort.key}` : sort.key)).join(",");
+const BANNERS_URL = "/banners";
 
 export default function BannersPage() {
   const { message } = App.useApp();
-  const [page, setPage] = useState(1);
+  // 운영자·조회전용은 BANNER_READ 만 있다 — 쓰기 컨트롤을 보여주면 눌러도 403 이 난다.
+  const canWrite = useAuthStore((state) => state.user?.permissions?.includes("BANNER_WRITE") ?? false);
+
+  // AdminBannerController.list 는 페이지네이션·검색이 없다 (카테고리 → 노출순서로 정렬된 전체).
+  // 다음 노출순서를 계산하려면 카테고리 전체가 필요해서, 카테고리 필터도 클라이언트에서 건다.
+  const { data, error, isLoading, mutate } = useSWR<BannerRow[]>(BANNERS_URL);
+  const allRows = useMemo(() => data ?? [], [data]);
   const [keyword, setKeyword] = useState("");
-  const [sorts, setSorts] = useState<SortSpec[]>([]);
+  const [categoryFilter, setCategoryFilter] = useState<BannerCategory | "ALL">("ALL");
 
-  const query = new URLSearchParams({ page: String(page), size: String(PAGE_SIZE) });
-  if (keyword) query.set("keyword", keyword);
-  const sortParam = toSortParam(sorts);
-  if (sortParam) query.set("sort", sortParam);
-
-  const { data, error, isLoading, mutate } = useSWR<BannerPageResponse>(`/banners?${query.toString()}`);
-
-  const handleSearchChange = (value: string) => {
-    setKeyword(value);
-    setPage(1);
-  };
-
-  const handleSortChange = (nextSorts: SortSpec[]) => {
-    setSorts(nextSorts);
-    setPage(1);
-  };
+  const filteredRows = useMemo(() => {
+    const lower = keyword.trim().toLowerCase();
+    return allRows.filter(
+      (row) =>
+        (categoryFilter === "ALL" || row.category === categoryFilter) &&
+        (!lower || row.title.toLowerCase().includes(lower)),
+    );
+  }, [allRows, keyword, categoryFilter]);
 
   // ---------- 등록 ----------
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [createForm] = Form.useForm<CreateBannerFormValues>();
-  const [createImageUrl, setCreateImageUrl] = useState<string | null>(null);
-  const [createImageUploading, setCreateImageUploading] = useState(false);
-
-  const openCreateModal = () => {
-    setCreateImageUrl(null);
-    setCreateOpen(true);
-  };
+  const [createForm] = Form.useForm<BannerFormValues>();
 
   const handleCreate = async () => {
     try {
       const values = await createForm.validateFields();
-      if (!createImageUrl) {
-        message.error("배너 이미지를 업로드해 주세요.");
-        return;
-      }
       setCreating(true);
-      await apiClient.post("/banners", {
-        category: values.category,
-        title: values.title,
-        description: values.description,
-        imageUrl: createImageUrl,
-        targetUrl: values.targetUrl,
-        startDate: values.period[0].format("YYYY-MM-DD"),
-        endDate: values.period[1].format("YYYY-MM-DD"),
-      });
+
+      // 이미지가 있어야 배너를 만들 수 있어서 /with-image 로 한 번에 보낸다.
+      // 이 API 는 노출기간을 받지 않으므로, 기간을 정했으면 만든 직후 따로 저장한다.
+      const formData = new FormData();
+      formData.append("category", values.category);
+      formData.append("title", values.title);
+      if (values.description) formData.append("description", values.description);
+      if (values.targetUrl) formData.append("targetUrl", values.targetUrl);
+      formData.append("displayOrder", String(values.displayOrder));
+      formData.append("image", values.image.file!);
+      const { data: created } = await apiClient.post<BannerRow>(
+        `${BANNERS_URL}/with-image`,
+        formData,
+      );
+
+      const period = toDisplayPeriod(values.period);
+      if (period.displayStartAt || period.displayEndAt) {
+        await apiClient.put(`${BANNERS_URL}/${created.id}/display-period`, period);
+      }
+
       message.success("배너가 등록되었습니다.");
-      await mutate();
       setCreateOpen(false);
     } catch (err) {
       if (err instanceof ApiError) {
-        // 응답 인터셉터가 이미 message.error로 표시했음.
+        // 응답 인터셉터가 이미 message.error로 표시함
         return;
       }
       // 폼 검증 에러도 여기로 떨어지는데, antd가 이미 문제 필드를 강조해주므로 더 할 일 없음.
     } finally {
       setCreating(false);
+      // 기간 저장만 실패한 경우에도 배너는 만들어졌으니 목록은 항상 다시 읽는다.
+      await mutate();
     }
   };
 
   // ---------- 수정 ----------
   const [editingRow, setEditingRow] = useState<BannerRow | null>(null);
   const [updating, setUpdating] = useState(false);
-  const [editForm] = Form.useForm<EditBannerFormValues>();
-  const [editImageUrl, setEditImageUrl] = useState<string | null>(null);
-  const [editImageUploading, setEditImageUploading] = useState(false);
+  const [editForm] = Form.useForm<BannerFormValues>();
 
-  const openEditModal = (row: BannerRow) => {
-    setEditingRow(row);
-    setEditImageUrl(row.imageUrl);
-    editForm.setFieldsValue({
-      title: row.title,
-      description: row.description ?? undefined,
-      targetUrl: row.targetUrl ?? undefined,
-      period: [dayjs(row.startDate), dayjs(row.endDate)],
-    });
-  };
+  // 모달이 닫혀 있으면 Form 이 언마운트돼 있어서(destroyOnHidden) setFieldsValue 가 먹지 않는다 —
+  // 대신 열릴 때 새로 만들어지는 Form 의 initialValues 로 넘긴다.
+  const editInitialValues = useMemo<Partial<BannerFormValues> | undefined>(
+    () =>
+      editingRow
+        ? {
+            category: editingRow.category,
+            title: editingRow.title,
+            description: editingRow.description ?? undefined,
+            targetUrl: editingRow.targetUrl ?? undefined,
+            image: { previewUrl: editingRow.imageUrl },
+            period: toPeriodValue(editingRow),
+          }
+        : undefined,
+    [editingRow],
+  );
 
   const handleUpdate = async () => {
     if (!editingRow) return;
     try {
       const values = await editForm.validateFields();
-      if (!editImageUrl) {
-        message.error("배너 이미지를 업로드해 주세요.");
-        return;
-      }
       setUpdating(true);
-      await apiClient.put(`/banners/${editingRow.id}`, {
-        title: values.title,
-        description: values.description,
-        imageUrl: editImageUrl,
-        targetUrl: values.targetUrl,
-        startDate: values.period[0].format("YYYY-MM-DD"),
-        endDate: values.period[1].format("YYYY-MM-DD"),
-      });
+      const url = `${BANNERS_URL}/${editingRow.id}`;
+
+      if (values.image.file) {
+        const formData = new FormData();
+        formData.append("title", values.title);
+        if (values.description) formData.append("description", values.description);
+        if (values.targetUrl) formData.append("targetUrl", values.targetUrl);
+        formData.append("image", values.image.file);
+        await apiClient.put(`${url}/with-image`, formData);
+      } else {
+        await apiClient.put(url, {
+          title: values.title,
+          description: values.description || null,
+          imageUrl: editingRow.imageUrl,
+          targetUrl: values.targetUrl || null,
+        });
+      }
+
+      // 노출기간은 별도 API — 건드린 경우에만 보낸다(시각까지 저장된 기존 값을 날짜 단위로 덮지 않게).
+      if (editForm.isFieldTouched("period")) {
+        await apiClient.put(`${url}/display-period`, toDisplayPeriod(values.period));
+      }
+
       message.success("배너가 수정되었습니다.");
       await mutate();
       setEditingRow(null);
     } catch (err) {
       if (err instanceof ApiError) {
+        await mutate();
         return;
       }
     } finally {
@@ -214,7 +154,7 @@ export default function BannersPage() {
   // ---------- 삭제/노출 토글/순서 변경 ----------
   const handleDelete = async (row: BannerRow) => {
     try {
-      await apiClient.delete(`/banners/${row.id}`);
+      await apiClient.delete(`${BANNERS_URL}/${row.id}`);
       message.success("배너가 삭제되었습니다.");
       await mutate();
     } catch (err) {
@@ -224,7 +164,14 @@ export default function BannersPage() {
 
   const handleToggleActive = async (row: BannerRow, active: boolean) => {
     try {
-      await apiClient.patch(`/banners/${row.id}/active`, { active });
+      if (active) {
+        // 비활성 배너는 순서가 비어 있다 — 다시 켤 때는 그 카테고리의 맨 뒤로 붙인다.
+        await apiClient.put(`${BANNERS_URL}/${row.id}/activate`, {
+          displayOrder: nextDisplayOrder(allRows, row.category),
+        });
+      } else {
+        await apiClient.put(`${BANNERS_URL}/${row.id}/deactivate`);
+      }
       message.success(active ? "배너를 노출 처리했습니다." : "배너를 비노출 처리했습니다.");
       await mutate();
     } catch (err) {
@@ -232,260 +179,95 @@ export default function BannersPage() {
     }
   };
 
+  const [moving, setMoving] = useState(false);
+
   const handleMove = async (row: BannerRow, direction: "up" | "down") => {
+    const ordered = orderedInCategory(allRows, row.category);
+    const index = ordered.findIndex((item) => item.id === row.id);
+    const neighbor = ordered[direction === "up" ? index - 1 : index + 1];
+    if (!neighbor) return;
+
+    // (카테고리, 노출순서)에 유니크 제약이 있어 바로 맞바꿀 수 없다 — 빈 순서를 거쳐서 교환한다.
+    setMoving(true);
     try {
-      await apiClient.patch(`/banners/${row.id}/move-${direction}`);
-      await mutate();
+      const temp = nextDisplayOrder(allRows, row.category);
+      await apiClient.put(`${BANNERS_URL}/${row.id}/display-order`, { displayOrder: temp });
+      await apiClient.put(`${BANNERS_URL}/${neighbor.id}/display-order`, {
+        displayOrder: row.displayOrder,
+      });
+      await apiClient.put(`${BANNERS_URL}/${row.id}/display-order`, {
+        displayOrder: neighbor.displayOrder,
+      });
     } catch (err) {
-      if (err instanceof ApiError) return;
+      if (!(err instanceof ApiError)) throw err;
+    } finally {
+      // 중간에 실패해도 서버 상태를 그대로 보여준다.
+      await mutate();
+      setMoving(false);
     }
   };
 
-  const columns = [
-    { title: "타이틀", dataIndex: "title", key: "title", sorter: { multiple: 1 } },
-    {
-      title: "카테고리",
-      dataIndex: "category",
-      key: "category",
-      render: (category: BannerCategory) => CATEGORY_LABEL[category],
-      sorter: { multiple: 2 },
-    },
-    {
-      title: "노출기간",
-      dataIndex: "startDate",
-      key: "startDate",
-      render: (_: string, row: BannerRow) => `${formatDate(row.startDate)} ~ ${formatDate(row.endDate)}`,
-      sorter: { multiple: 3 },
-    },
-    {
-      title: "노출상태",
-      dataIndex: "status",
-      key: "status",
-      render: (status: BannerStatus) => <Tag color={STATUS_COLOR[status]}>{STATUS_LABEL[status]}</Tag>,
-      sorter: { multiple: 4 },
-    },
-    {
-      title: "노출순서",
-      dataIndex: "displayOrder",
-      key: "displayOrder",
-      render: (order: number | null, row: BannerRow) =>
-        order == null ? (
-          "-"
-        ) : (
-          <Space size={4}>
-            {order}
-            <Button
-              size="small"
-              type="text"
-              icon={<ArrowUpOutlined />}
-              onClick={() => handleMove(row, "up")}
-            />
-            <Button
-              size="small"
-              type="text"
-              icon={<ArrowDownOutlined />}
-              onClick={() => handleMove(row, "down")}
-            />
-          </Space>
-        ),
-      sorter: { multiple: 5 },
-    },
-    {
-      title: "노출",
-      key: "active",
-      render: (_: unknown, row: BannerRow) => (
-        <Switch
-          checked={row.active}
-          onChange={(checked) => handleToggleActive(row, checked)}
-        />
-      ),
-    },
-    {
-      title: "관리",
-      key: "actions",
-      render: (_: unknown, row: BannerRow) => (
-        <Space>
-          <Button size="small" onClick={() => openEditModal(row)}>
-            수정
-          </Button>
-          <Popconfirm
-            title="정말 삭제하시겠습니까?"
-            onConfirm={() => handleDelete(row)}
-            okText="삭제"
-            cancelText="취소"
-          >
-            <Button size="small" danger>
-              삭제
-            </Button>
-          </Popconfirm>
-        </Space>
-      ),
-    },
-  ];
+  const columns = useBannerColumns({
+    allRows,
+    canWrite,
+    moving,
+    onMove: handleMove,
+    onToggleActive: handleToggleActive,
+    onEdit: setEditingRow,
+    onDelete: handleDelete,
+  });
 
   return (
     <>
       {error && <ErrorAlert message="배너 목록을 불러오지 못했습니다." onRetry={() => mutate()} />}
+      {/* actions 는 모바일에서 플로팅 버튼 하나로 바뀌므로 카테고리 필터는 표 위에 따로 둔다. */}
+      <Segmented<BannerCategory | "ALL">
+        value={categoryFilter}
+        onChange={setCategoryFilter}
+        options={[{ value: "ALL", label: "전체" }, ...CATEGORY_OPTIONS]}
+        style={{ marginBottom: 12 }}
+      />
       <DataTable<BannerRow>
         title="배너관리"
         searchPlaceholder="타이틀 검색"
         searchValue={keyword}
-        onSearchChange={handleSearchChange}
+        onSearchChange={setKeyword}
         actions={
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
-            등록
-          </Button>
+          canWrite ? (
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+              등록
+            </Button>
+          ) : undefined
         }
         rowKey="id"
         columns={columns}
-        dataSource={data?.content ?? []}
+        dataSource={filteredRows}
         loading={isLoading}
-        serverSide
-        total={data?.totalElements}
-        page={page}
-        pageSize={PAGE_SIZE}
-        onPageChange={setPage}
-        onSortChange={handleSortChange}
       />
 
-      <Modal
-        title="배너 등록"
+      <BannerFormModal
+        mode="create"
         open={createOpen}
+        form={createForm}
         onOk={handleCreate}
         onCancel={() => setCreateOpen(false)}
         confirmLoading={creating}
-        destroyOnHidden
-        okText="등록"
-        cancelText="취소"
-      >
-        <Form<CreateBannerFormValues> form={createForm} layout="vertical">
-          <Form.Item
-            name="category"
-            label="카테고리"
-            rules={[{ required: true, message: "카테고리를 선택해 주세요." }]}
-          >
-            <Select placeholder="카테고리 선택" options={CATEGORY_OPTIONS} />
-          </Form.Item>
-          <Form.Item
-            name="title"
-            label="타이틀"
-            rules={[{ required: true, message: "타이틀을 입력해 주세요." }]}
-          >
-            <Input placeholder="타이틀" />
-          </Form.Item>
-          <Form.Item name="description" label="설명">
-            <Input.TextArea placeholder="설명 (선택)" rows={2} />
-          </Form.Item>
-          <Form.Item label="이미지" required>
-            <Space>
-              <Upload
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                showUploadList={false}
-                customRequest={async (options) => {
-                  const { file, onSuccess, onError } = options;
-                  setCreateImageUploading(true);
-                  try {
-                    const formData = new FormData();
-                    formData.append("file", file as File);
-                    const { data: uploadData } = await apiClient.post<{ imageUrl: string }>(
-                      "/banners/upload-image",
-                      formData,
-                      { headers: { "Content-Type": "multipart/form-data" } },
-                    );
-                    setCreateImageUrl(uploadData.imageUrl);
-                    onSuccess?.(uploadData);
-                  } catch (uploadErr) {
-                    onError?.(uploadErr as Error);
-                  } finally {
-                    setCreateImageUploading(false);
-                  }
-                }}
-              >
-                <Button icon={<UploadOutlined />} loading={createImageUploading}>
-                  이미지 업로드
-                </Button>
-              </Upload>
-              {createImageUrl && <Image src={createImageUrl} alt="배너 미리보기" width={80} />}
-            </Space>
-          </Form.Item>
-          <Form.Item name="targetUrl" label="연결 링크">
-            <Input placeholder="https://..." autoComplete="off" />
-          </Form.Item>
-          <Form.Item
-            name="period"
-            label="노출기간"
-            rules={[{ required: true, message: "노출기간을 선택해 주세요." }]}
-          >
-            <DatePicker.RangePicker style={{ width: "100%" }} />
-          </Form.Item>
-        </Form>
-      </Modal>
+        onValuesChange={(changed) => {
+          if (changed.category) {
+            createForm.setFieldsValue({ displayOrder: nextDisplayOrder(allRows, changed.category) });
+          }
+        }}
+      />
 
-      <Modal
-        title="배너 수정"
+      <BannerFormModal
+        mode="edit"
         open={editingRow !== null}
+        form={editForm}
+        initialValues={editInitialValues}
         onOk={handleUpdate}
         onCancel={() => setEditingRow(null)}
         confirmLoading={updating}
-        destroyOnHidden
-        okText="저장"
-        cancelText="취소"
-      >
-        <Form<EditBannerFormValues> form={editForm} layout="vertical">
-          <Form.Item
-            name="title"
-            label="타이틀"
-            rules={[{ required: true, message: "타이틀을 입력해 주세요." }]}
-          >
-            <Input placeholder="타이틀" />
-          </Form.Item>
-          <Form.Item name="description" label="설명">
-            <Input.TextArea placeholder="설명 (선택)" rows={2} />
-          </Form.Item>
-          <Form.Item label="이미지" required>
-            <Space>
-              <Upload
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                showUploadList={false}
-                customRequest={async (options) => {
-                  const { file, onSuccess, onError } = options;
-                  setEditImageUploading(true);
-                  try {
-                    const formData = new FormData();
-                    formData.append("file", file as File);
-                    const { data: uploadData } = await apiClient.post<{ imageUrl: string }>(
-                      "/banners/upload-image",
-                      formData,
-                      { headers: { "Content-Type": "multipart/form-data" } },
-                    );
-                    setEditImageUrl(uploadData.imageUrl);
-                    onSuccess?.(uploadData);
-                  } catch (uploadErr) {
-                    onError?.(uploadErr as Error);
-                  } finally {
-                    setEditImageUploading(false);
-                  }
-                }}
-              >
-                <Button icon={<UploadOutlined />} loading={editImageUploading}>
-                  이미지 변경
-                </Button>
-              </Upload>
-              {editImageUrl && <Image src={editImageUrl} alt="배너 미리보기" width={80} />}
-            </Space>
-          </Form.Item>
-          <Form.Item name="targetUrl" label="연결 링크">
-            <Input placeholder="https://..." autoComplete="off" />
-          </Form.Item>
-          <Form.Item
-            name="period"
-            label="노출기간"
-            rules={[{ required: true, message: "노출기간을 선택해 주세요." }]}
-          >
-            <DatePicker.RangePicker style={{ width: "100%" }} />
-          </Form.Item>
-        </Form>
-      </Modal>
+      />
     </>
   );
 }

@@ -321,6 +321,7 @@ export function buildReports(count: number, moimIds: number[], memberIds: number
 }
 
 // ───────────────────────── 배너 (banners) ─────────────────────────
+// 실제 admin API(BannerResponse)와 같은 모양 — visibleNow 는 저장하지 않고 응답할 때 계산한다.
 
 export type BannerCategory = "HOME" | "MOIM" | "CHAT";
 export type BannerStatusSeed = "always-active" | "scheduled" | "ended" | "inactive";
@@ -332,10 +333,41 @@ export interface BannerSeed {
   description: string | null;
   imageUrl: string;
   targetUrl: string | null;
-  startDate: string;
-  endDate: string;
+  /** 비활성이면 null. */
   displayOrder: number | null;
-  active: boolean;
+  isActive: boolean;
+  /** null 이면 즉시 시작. */
+  displayStartAt: string | null;
+  /** null 이면 무기한. */
+  displayEndAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const BANNER_COLORS: Record<BannerCategory, [string, string]> = {
+  HOME: ["#ff8a65", "#ffb74d"],
+  MOIM: ["#4fc3f7", "#7986cb"],
+  CHAT: ["#81c784", "#4db6ac"],
+};
+
+const escapeXml = (text: string) =>
+  text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/**
+ * 외부 이미지 서버 없이도 항상 보이도록 SVG 를 data URL 로 만든다 (오프라인·사내망 시연 대비).
+ * 카테고리별 그라데이션 위에 타이틀을 얹은 640x280 배너.
+ */
+export function buildBannerImage(category: BannerCategory, title: string): string {
+  const [from, to] = BANNER_COLORS[category];
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="280" viewBox="0 0 640 280">
+<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${from}"/><stop offset="1" stop-color="${to}"/></linearGradient></defs>
+<rect width="640" height="280" fill="url(#g)"/>
+<circle cx="560" cy="60" r="90" fill="#fff" fill-opacity="0.15"/>
+<circle cx="80" cy="250" r="70" fill="#fff" fill-opacity="0.12"/>
+<text x="40" y="70" font-family="sans-serif" font-size="22" font-weight="700" fill="#fff" fill-opacity="0.85">MAMIT · ${category}</text>
+<text x="40" y="160" font-family="sans-serif" font-size="36" font-weight="800" fill="#fff">${escapeXml(title)}</text>
+</svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
 const BANNER_DEFS: { category: BannerCategory; title: string; kind: BannerStatusSeed }[] = [
@@ -354,45 +386,46 @@ export function buildBanners(): BannerSeed[] {
   const orderByCategory: Record<BannerCategory, number> = { HOME: 0, MOIM: 0, CHAT: 0 };
 
   return BANNER_DEFS.map((def, index) => {
-    let startDate: string;
-    let endDate: string;
-    let active: boolean;
+    let displayStartAt: string | null;
+    let displayEndAt: string | null;
+    let isActive = true;
 
     switch (def.kind) {
       case "scheduled":
-        startDate = isoDaysFromNow(randomInt(5, 20)).slice(0, 10);
-        endDate = isoDaysFromNow(randomInt(30, 60)).slice(0, 10);
-        active = true;
+        displayStartAt = isoDaysFromNow(randomInt(5, 20));
+        displayEndAt = isoDaysFromNow(randomInt(30, 60));
         break;
       case "ended":
-        startDate = isoDaysAgo(randomInt(60, 90)).slice(0, 10);
-        endDate = isoDaysAgo(randomInt(5, 20)).slice(0, 10);
-        active = true;
+        displayStartAt = isoDaysAgo(randomInt(60, 90));
+        displayEndAt = isoDaysAgo(randomInt(5, 20));
         break;
       case "inactive":
-        startDate = isoDaysAgo(randomInt(30, 60)).slice(0, 10);
-        endDate = isoDaysFromNow(randomInt(30, 60)).slice(0, 10);
-        active = false;
+        displayStartAt = null;
+        displayEndAt = null;
+        isActive = false;
         break;
       default:
-        startDate = isoDaysAgo(randomInt(10, 30)).slice(0, 10);
-        endDate = isoDaysFromNow(randomInt(30, 90)).slice(0, 10);
-        active = true;
+        // 기간 없이(즉시 · 무기한) 노출하는 배너와 기간이 정해진 배너를 섞는다.
+        displayStartAt = index % 2 === 0 ? null : isoDaysAgo(randomInt(10, 30));
+        displayEndAt = index % 2 === 0 ? null : isoDaysFromNow(randomInt(30, 90));
     }
 
-    const displayOrder = active && def.kind !== "ended" ? ++orderByCategory[def.category] : null;
+    const createdAt = isoDaysAgo(randomInt(30, 120));
 
     return {
       id: index + 1,
       category: def.category,
       title: def.title,
       description: `${def.title} 배너입니다. 클릭하면 상세 페이지로 이동합니다.`,
-      imageUrl: `https://picsum.photos/seed/mamit-banner-${index + 1}/640/280`,
+      imageUrl: buildBannerImage(def.category, def.title),
       targetUrl: "https://mommydndn.com",
-      startDate,
-      endDate,
-      displayOrder,
-      active,
+      // 비활성 배너만 순서가 비어 있다 (노출기간이 끝난 배너도 활성이면 순서를 가진다).
+      displayOrder: isActive ? ++orderByCategory[def.category] : null,
+      isActive,
+      displayStartAt,
+      displayEndAt,
+      createdAt,
+      updatedAt: createdAt,
     };
   });
 }
